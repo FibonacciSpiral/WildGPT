@@ -45,7 +45,7 @@ class HFChatStreamWorker(QObject):
 
     def run(self) -> None:
         try:
-            client = InferenceClient(token=self._token, timeout=self._timeout)
+            client = InferenceClient(token=self._token, timeout=self._timeout, provider="featherless-ai")
             stream = client.chat.completions.create(
                 model=self._model,
                 messages=self._messages,
