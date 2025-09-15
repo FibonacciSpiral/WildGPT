@@ -238,7 +238,6 @@ class ChatTextBrowser(QTextBrowser):
 
         # Recompute geometry whenever the document changes.
         self.document().documentLayout().documentSizeChanged.connect(self.updateGeometry)
-        self.document().contentsChanged.connect(self.updateGeometry)
 
         self.setObjectName("bubbleFrame")
         self._sync_doc()
@@ -333,6 +332,19 @@ class ChatTextBrowser(QTextBrowser):
             changed = True
         if changed:
             doc.setDefaultTextOption(opt)
+
+class inputBarBrowser(ChatTextBrowser):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(False)
+        inset = 0  # your bubble’s inner padding
+        offset = 0
+        self.setViewportMargins(inset , inset, inset, inset + offset)  # left top right bottom
+
+    def heightForWidth(self, w: int) -> int:
+        parent_h = super().heightForWidth(w)
+        return parent_h + 15
+
 
 class ChatMessageBubble(QFrame):
     """
@@ -440,6 +452,7 @@ class ChatMessageBubble(QFrame):
 
     def new_markdown_available(self):
         self._browser.setHtml(md.render(self._md_buffer))
+        self.updateGeometry()
 
 
 # ---- Scroll area to hold messages ----
@@ -515,11 +528,8 @@ class AutoGrowTextEdit(QTextEdit):
         self._max_rows = max(self._min_rows, max_rows)
         self.setAcceptRichText(False)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.MinimumExpanding)
-        self.textChanged.connect(self._update_height)
-
-        # Initial sizing
-        self._update_height()
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.setMinimumHeight()
 
     def _row_px(self) -> int:
         # Use lineSpacing for better cross-font results
@@ -541,28 +551,6 @@ class AutoGrowTextEdit(QTextEdit):
         size = self.document().documentLayout().documentSize()
         return math.ceil(size.height()) + self._frame_and_margins()
 
-    def _update_height(self) -> None:
-        min_h = self._rows_to_height(self._min_rows)
-        max_h = self._rows_to_height(self._max_rows)
-        doc_h = self._doc_height()
-
-        new_h = max(min_h, min(max_h, doc_h))
-        self.setMinimumHeight(min_h)
-        self.setMaximumHeight(max_h)
-        # Fix height only when below max to avoid fighting scrollbar behavior
-        if doc_h < max_h:
-            self.setFixedHeight(new_h)
-            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        else:
-            # At/above max rows: allow scrolling
-            self.setFixedHeight(max_h)
-            self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        # Reflow on width changes (e.g., window resize/theme change)
-        self._update_height()
-
 # ---- Input bar ----
 class ChatInputBar(QWidget):
     # ChatInputBar signals
@@ -572,7 +560,7 @@ class ChatInputBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         # UI elements
-        self.input_bar = AutoGrowTextEdit(self, min_rows=1, max_rows=16)
+        self.input_bar = inputBarBrowser()
         self.send_btn = QPushButton("Send", self)
         self.stop_btn = QPushButton("Stop", self)
         self.clear_btn = QPushButton("Clear", self)
@@ -582,16 +570,12 @@ class ChatInputBar(QWidget):
         self.send_btn.clicked.connect(self.send_btn_clicked)
         self.stop_btn.clicked.connect(self.stopRequested)
         self.clear_btn.clicked.connect(self.clearRequested)
-        self.setMinimumWidth(1200)
-        self.setSizePolicy(QSizePolicy.Maximum, self.sizePolicy().verticalPolicy())
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 12)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         self.input_bar.setPlaceholderText("Ask anything")
-        self.input_bar.setMinimumHeight(120)
-        self.input_bar.setMaximumHeight(600)
         self.input_bar.setAcceptRichText(False)
         self.input_bar.installEventFilter(self)
 
@@ -600,12 +584,14 @@ class ChatInputBar(QWidget):
         self.stop_btn.setEnabled(False)
 
         btn_row.addWidget(self.clear_btn)
-        btn_row.addItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
+        btn_row.addWidget(HSpacer())
         btn_row.addWidget(self.stop_btn)
         btn_row.addWidget(self.send_btn)
 
+        self.btn_container = QWidget()
+        self.btn_container.setLayout(btn_row)
         layout.addWidget(self.input_bar)
-        layout.addLayout(btn_row)
+        layout.addWidget(self.btn_container)
 
     def send_btn_clicked(self) -> None:
         text = self.input_bar.toPlainText().strip()
@@ -625,6 +611,14 @@ class ChatInputBar(QWidget):
                 self.send_btn_clicked()
                 return True
         return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        """Ensure bubbles max width = 85% of parent width."""
+        if self.parentWidget():
+            cap = int(self.parentWidget().width() * 0.5)
+            self.input_bar.setMaximumWidth(cap)
+            self.input_bar.setMinimumWidth(cap)
+        super().resizeEvent(event)
 
 
 # -- REPLACE the entire TopBar class --
@@ -731,7 +725,7 @@ class ChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Wild GPT")
-        self.setWindowIcon(QIcon("WildGPT.ico"))
+        self.setWindowIcon(QIcon("wildAI.ico"))
         #components
         self.topbar = TopBar(self)
         self.chat_stack = ChatScrollArea(self)
@@ -759,7 +753,7 @@ class ChatWindow(QMainWindow):
         # Wire outward
         self.input_bar.userMsgSentSignal.connect(self.sendMessage)
         self.input_bar.stopRequested.connect(self.stopRequested)
-        self.input_bar.clearRequested.connect(self._on_clear_clicked)
+        self.input_bar.clearRequested.connect(self.clearRequested)
         self.topbar.modelChanged.connect(self.update_model)
         self.modelChanged.connect(self.update_model)
         self.topbar.settingsChanged.connect(self.settingsChanged)
@@ -776,32 +770,11 @@ class ChatWindow(QMainWindow):
     def add_assistant_message(self, text: str) -> None:
         self.chat_stack.add_bubble(ChatMessageBubble(ChatRole.ASSISTANT, text))
 
-    def append_assistant_stream(self, chunk: str) -> None:
-        """
-        Stream assistant text:
-        - Reuse last assistant bubble when possible.
-        - Keep a raw markdown buffer on the bubble.
-        - Re-render the whole buffer to HTML each time (prevents <p>-per-chunk).
-        """
-        last_bubble = self.chat_stack.peek_most_recent()
-
-        if isinstance(last_bubble, ChatMessageBubble) and last_bubble.role == ChatRole.ASSISTANT:
-            chat_assistant_bubble = last_bubble
-        else:
-            chat_assistant_bubble = ChatMessageBubble(ChatRole.ASSISTANT, "")
-            self.chat_stack.add_bubble(chat_assistant_bubble)
-
-        # Re-render full message; do NOT concatenate HTML strings
-
-        chat_assistant_bubble.append_markdown(chunk)
-        QTimer.singleShot(0, self.chat_stack.scroll_to_bottom)
-
     def finish_assistant_stream(self) -> None:
-        self._set_typing(False)
+        pass
 
     def set_busy(self, busy: bool) -> None:
         self.input_bar.set_busy(busy)
-        self._set_typing(busy)
 
     def set_theme(self, theme: Theme) -> None:
         """Public API to switch theme at runtime."""
@@ -816,22 +789,14 @@ class ChatWindow(QMainWindow):
     # it's also very boring just ... that don't even move
 
     # -------- Internal handlers --------
-    def _set_typing(self, typing: bool) -> None:
-        if typing and self.busy_indicator.isHidden():
-            self.busy_indicator.show()
-            self.chat_stack._chat_stack_layout.insertWidget(self.chat_stack._chat_stack_layout.count() - 1, self.busy_indicator)
-        elif not typing and not self.busy_indicator.isHidden():
-            self.busy_indicator.hide()
-            self.busy_indicator.setParent(None)
 
-    def _on_clear_clicked(self) -> None:
+    def on_clear_clicked(self) -> None:
         self.clear_messages()
-        self.clearRequested.emit()
 
     def update_model(self, new_model):
         self.current_model = str(new_model)
 
     def update_settings(self, new_settings: dict) -> None:
         for setting_name, value in new_settings.items():
-            if setting_name is "temperature":
+            if setting_name == "temperature":
                 self.temperature = value

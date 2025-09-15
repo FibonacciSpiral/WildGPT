@@ -15,6 +15,7 @@ class HFChatStreamWorker(QObject):
     chunk = pyqtSignal(str)
     finished = pyqtSignal(str)           # full text
     error = pyqtSignal(str)
+    state = pyqtSignal(str)
 
     def __init__(
         self,
@@ -45,7 +46,12 @@ class HFChatStreamWorker(QObject):
 
     def run(self) -> None:
         try:
+            self.state.emit("busy")  # <— regular busy/connecting indicator ON
+
             client = InferenceClient(token=self._token, timeout=self._timeout, provider="featherless-ai")
+
+            # If the model supports thinking, enable it via provider-specific params.
+            # (These are no-ops on models that don't support them.)
             stream = client.chat.completions.create(
                 model=self._model,
                 messages=self._messages,
@@ -53,18 +59,68 @@ class HFChatStreamWorker(QObject):
                 top_p=self._top_p,
                 max_tokens=self._max_tokens,
                 stream=True,
+                # examples:
+                # OpenAI-style reasoning effort:
+                # extra_body={"reasoning": {"effort": "medium"}},
+                # Qwen/DeepSeek-style thinking switch:
+                # extra_body={"enable_thinking": True, "thinking_budget": 128},
             )
+
+            got_any_tokens = False
+            got_answer_tokens = False
+            self._full_text_parts = []
+            self._reasoning_parts = []
+
             for chunk in stream:
                 if self._stopped:
                     break
-                # OpenAI-compatible delta structure
                 if not chunk or not chunk.choices:
                     continue
+
                 delta = chunk.choices[0].delta
+
+                # 1) REASONING / THINKING STREAM (provider-dependent keys)
+                # vLLM / DeepSeek / Qwen-compatible:
+                rc = getattr(delta, "reasoning_content", None)
+                # Some providers nest it:
+                r = getattr(delta, "reasoning", None)
+                if r and hasattr(r, "content"):
+                    rc = (rc or "") + (r.content or "")
+
+                if rc:
+                    if not got_any_tokens:
+                        self.state.emit("thinking")  # <— switch UI to “thinking”
+                        got_any_tokens = True
+                    self._reasoning_parts.append(rc)
+                    self.thinking.emit(rc)  # <— emit to a separate area in your UI
+                    continue
+
+                # 2) NORMAL ANSWER CONTENT
                 piece = getattr(delta, "content", None)
                 if piece:
+                    if not got_any_tokens:
+                        self.state.emit("responding")  # got first token (no reasoning)
+                        got_any_tokens = True
+                    if not got_answer_tokens:
+                        # first answer token after thinking => switch to responding
+                        self.state.emit("responding")
+                        got_answer_tokens = True
+
                     self._full_text_parts.append(piece)
                     self.chunk.emit(piece)
-            self.finished.emit("".join(self._full_text_parts))
+                    continue
+
+                # (Optional) you can also watch role/tool_calls deltas, etc.
+
+            final_answer = "".join(self._full_text_parts)
+            final_reasoning = "".join(getattr(self, "_reasoning_parts", []))
+            # If you want, expose the collected reasoning separately:
+            # self.reasoning_finished.emit(final_reasoning)
+
+            self.state.emit("done")
+            self.finished.emit(final_answer)
+
         except Exception as e:
+            self.state.emit("error")
             self.error.emit(str(e))
+

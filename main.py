@@ -20,7 +20,7 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QThread
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from controller import Controller
@@ -96,68 +96,216 @@ def exception_to_text(exc_type, exc_value, exc_tb) -> str:
     return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtWidgets import (
+    QApplication, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit,
+    QPushButton, QStyle, QHBoxLayout, QVBoxLayout, QSizePolicy
+)
+
+class ExceptionDialog(QDialog):
+    def __init__(self, message: str, details: str, parent=None):
+        super().__init__(parent)
+        self._choice = "continue"
+        self.setWindowTitle("Unexpected Error")
+        self.setWindowModality(Qt.ApplicationModal)
+        # Make it clearly resizable
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(520, 360)
+        self.setWindowIcon(QIcon("wildAI.ico"))
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+        )
+
+        # --- Header: icon + message ---
+        icon = self.style().standardIcon(QStyle.SP_MessageBoxCritical)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(icon.pixmap(40, 40))
+        icon_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        msg_lbl = QLabel(message or "Unexpected Error")
+        msg_lbl.setWordWrap(True)
+
+        sub_lbl = QLabel("Close to continue using the app, or Quit to exit.")
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setStyleSheet("color: gray;")
+
+        header_text = QVBoxLayout()
+        header_text.addWidget(msg_lbl)
+        header_text.addWidget(sub_lbl)
+
+        header = QHBoxLayout()
+        header.addWidget(icon_lbl)
+        header.addLayout(header_text)
+        header.addStretch(1)
+
+        # --- Details area (expandable, scrollable) ---
+        details_edit = QPlainTextEdit(details or "")
+        details_edit.setReadOnly(True)
+        details_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+        mono = QFont("Courier New")
+        mono.setStyleHint(QFont.Monospace)
+        details_edit.setFont(mono)
+
+        # --- Buttons ---
+        buttons = QDialogButtonBox()
+        close_btn = buttons.addButton("Close", QDialogButtonBox.AcceptRole)
+        quit_btn = buttons.addButton("Quit", QDialogButtonBox.DestructiveRole)
+        copy_btn = buttons.addButton("Copy details", QDialogButtonBox.ActionRole)
+
+        close_btn.clicked.connect(self.accept)
+        def _quit():
+            self._choice = "quit"
+            self.accept()
+        quit_btn.clicked.connect(_quit)
+
+        def _copy():
+            QApplication.clipboard().setText(details_edit.toPlainText())
+        copy_btn.clicked.connect(_copy)
+
+        # --- Layout ---
+        root = QVBoxLayout(self)
+        root.addLayout(header)
+        root.addWidget(details_edit)
+        root.addWidget(buttons)
+
+        # Default focus & button
+        close_btn.setDefault(True)
+
+        # --- per-class stylesheet (scoped to this dialog subtree) ---
+        self.setStyleSheet("""
+               /* Root dialog */
+               QDialog#ExceptionDialog {
+                   background: palette(base);
+                   border: 1px solid palette(mid);
+                   border-radius: 12px;
+               }
+
+               /* Optional theme based on dynamic property */
+               QDialog#ExceptionDialog[severity="critical"] {
+                   border: 1px solid #d9534f;
+               }
+
+               /* Header */
+               QLabel#message {
+                   font-weight: 600;
+                   font-size: 14pt;
+               }
+               QLabel#subtitle {
+                   color: palette(mid);
+                   margin-top: 2px;
+               }
+               QLabel#icon {
+                   margin-right: 12px;
+               }
+
+               /* Details area */
+               QPlainTextEdit#details {
+                   background: palette(alternate-base);
+                   border: 1px solid palette(mid);
+                   border-radius: 8px;
+                   padding: 6px;
+               }
+
+               /* Buttons */
+               QDialogButtonBox QPushButton {
+                   padding: 6px 12px;
+                   border-radius: 8px;
+               }
+               QDialogButtonBox QPushButton:default {
+                   font-weight: 600;
+               }
+               """)
+
+    @property
+    def choice(self) -> str:
+        return self._choice
+
+
 def show_exception_dialog(message: str, details: str) -> str:
-    """Present a critical error dialog and return "continue" or "quit".
-
-    Why: Allows users to keep working if the error is non-fatal.
-    """
+    """Present a resizable critical error dialog; return 'continue' or 'quit'."""
     parent = QApplication.activeWindow()
-    box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Critical)
-    box.setWindowTitle("Unexpected Error")
-    box.setText(message)
-    box.setInformativeText(
-        "Close to continue using the app, or Quit to exit."
-    )
-    box.setDetailedText(details)
-    box.setWindowModality(Qt.ApplicationModal)
-
-    close_btn = box.addButton("Close", QMessageBox.AcceptRole)  # continue
-    quit_btn = box.addButton("Quit", QMessageBox.DestructiveRole)
-    box.setDefaultButton(close_btn)
-
-    box.exec_()
-    return "quit" if box.clickedButton() is quit_btn else "continue"
+    dlg = ExceptionDialog(message, details, parent)
+    dlg.resize(1000, 600)  # nice starting size; user can resize
+    dlg.exec_()
+    return dlg.choice
 
 
 _handling_guard = False  # low-level recursion guard only
 
 
-def handle_exception(exc_type, exc_value, exc_tb) -> None:
-    """Central unhandled-exception hook: log, show dialog, optionally quit.
+# --- GUI-thread bridge for showing the dialog ---------------------------------
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
 
-    Debounced: will not show another dialog while one is open, or if the
-    exact same error repeats within a short cooldown window.
-    """
-    global _handling_guard
+
+
+class _DialogBridge(QObject):
+    show_dialog = pyqtSignal(str, str)  # (message, details)
+
+    def __init__(self):
+        super().__init__()
+        self.show_dialog.connect(self._on_show, Qt.QueuedConnection)
+
+    @pyqtSlot(str, str)
+    def _on_show(self, message: str, details: str) -> None:
+        try:
+            choice = show_exception_dialog(message=message, details=details)
+            if choice == "quit":
+                QApplication.instance().quit()
+        finally:
+            _exc_mgr.on_closed()
+
+_dialog_bridge: _DialogBridge | None = None
+
+def handle_exception(exc_type, exc_value, exc_tb) -> None:
+    """Central unhandled-exception hook: log, show dialog, optionally quit."""
+    global _handling_guard, _dialog_bridge
+
     if _handling_guard:
         traceback.print_exception(exc_type, exc_value, exc_tb)
         return
 
     _handling_guard = True
     try:
+        # Always print something to the console, even if logging isn't ready yet.
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+        if not _logger.handlers:
+            import logging, sys
+            h = logging.StreamHandler(sys.stdout)
+            h.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            _logger.addHandler(h)
+
         details = exception_to_text(exc_type, exc_value, exc_tb)
         _logger.error("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
 
-        app = QApplication.instance() or QApplication(sys.argv)
+        # Ensure we have an app and remember if we just created it.
+        existing_app = QApplication.instance()
+        created_temp_app = existing_app is None
+        app = existing_app or QApplication(sys.argv)
 
-        def _show():
-            try:
-                if not _exc_mgr.should_show(exc_type, exc_value):
-                    return
-                choice = show_exception_dialog(
-                    message=str(exc_value) or exc_type.__name__, details=details
-                )
-                if choice == "quit":
-                    app.quit()
-            finally:
-                _exc_mgr.on_closed()
+        # Ensure our bridge lives in the GUI thread.
+        if _dialog_bridge is None:
+            _dialog_bridge = _DialogBridge()
+            _dialog_bridge.moveToThread(app.thread())
 
-        # Ensure dialog runs on the GUI thread.
-        QTimer.singleShot(0, _show)
+        # Decide debouncing BEFORE posting to the GUI thread.
+        if not _exc_mgr.should_show(exc_type, exc_value):
+            return
 
-        # If we had to create a temporary app, we need a loop to show the dialog.
-        if not QApplication.instance():
+        message = str(exc_value) or exc_type.__name__
+
+        # If we're already on the GUI thread, call directly; else, emit queued.
+        if QThread.currentThread() is app.thread():
+            _dialog_bridge._on_show(message, details)
+        else:
+            _dialog_bridge.show_dialog.emit(message, details)
+
+        # If we created a temporary app for startup-time errors, run its loop
+        # so the modal dialog can actually appear.
+        if created_temp_app:
             app.exec_()
 
     finally:

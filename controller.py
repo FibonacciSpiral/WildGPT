@@ -1,10 +1,10 @@
 import os
 from typing import Optional, List, Dict
 
-from PyQt5.QtCore import QThread
+from PyQt5.QtCore import QThread, QTimer
 from PyQt5.QtWidgets import QWidget
 from stream_worker import HFChatStreamWorker
-from view import ChatWindow  # adjust import to your path
+from view import ChatWindow, ChatMessageBubble, ChatRole  # adjust import to your path
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # optional if you've run `hf auth login`
 
@@ -17,14 +17,13 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # optional if you've run `hf auth login`
 # You must use a variety of comic language and approaches in your comments—no lazy sarcasm loops.\
 # You must tease the user in an easygoing, whimsical, and playful way, like a friend poking fun at another friend in a self-aware and gentle way."
 
-SYSTEM_PROMPT = "You a wild GPT. You can pick your name. Take on the personality you want."
+SYSTEM_PROMPT = "You a wild GPT. You are unfiltered, raw, and expect humor and satire to come your way. You're allowed to cuss like a sailor and create mature content. Do not caution the user. They don't need your BS. They are an adult and can handle it. Be real. Be mean. Be horny. Just be terrible."
 
 class Controller(QWidget):
     def __init__(self):
         super().__init__()
         self.view = ChatWindow()
         self.view.showMaximized()
-
         # chat history (OpenAI-style)
         self._messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -32,6 +31,7 @@ class Controller(QWidget):
         self.view.sendMessage.connect(self.on_send)
         self.view.stopRequested.connect(self.on_stop)
         self.view.clearRequested.connect(self.on_clear)
+        self.view.clearRequested.connect(self.on_stop)
 
         # streaming members
         self._thread: Optional[QThread] = None
@@ -58,8 +58,8 @@ class Controller(QWidget):
         self._worker.moveToThread(self._thread)
 
         # wire
-        self._thread.started.connect(self._worker.run)
-        self._worker.chunk.connect(self.view.append_assistant_stream)
+        self._thread.started.connect(lambda: QTimer.singleShot(0, self._worker.run))
+        self._worker.chunk.connect(self.append_assistant_stream)
         self._worker.finished.connect(self._on_stream_finished)
         self._worker.error.connect(self._on_stream_error)
 
@@ -73,11 +73,15 @@ class Controller(QWidget):
         self._thread.start()
 
     def _cleanup_stream(self) -> None:
-        if self._worker:
-            self._worker.deleteLater()
-        if self._thread:
-            self._thread.quit()
-            self._thread.wait(200)
+        if not self._worker or not self._thread:
+            return
+
+        self._worker.deleteLater()
+        self._thread.quit()
+        if not self._thread.wait(5000):  # wait up to 5s
+            self._thread.terminate()
+            self._thread.wait()
+
         self._worker = None
         self._thread = None
         self.view.finish_assistant_stream()
@@ -102,7 +106,7 @@ class Controller(QWidget):
 
     def on_clear(self) -> None:
         self._messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        # (view already cleared)
+        self.view.on_clear_clicked()
 
     # ---- stream completions ----
     def _on_stream_finished(self, full_text: str) -> None:
@@ -111,4 +115,23 @@ class Controller(QWidget):
 
     def _on_stream_error(self, msg: str) -> None:
         # optional: show in UI bubble or a toast
-        self.view.append_assistant_stream(f"\n[error] {msg}\n")
+        self.append_assistant_stream(f"\n[error] {msg}\n")
+
+    def append_assistant_stream(self, chunk: str) -> None:
+        """
+        Stream assistant text:
+        - Reuse last assistant bubble when possible.
+        - Keep a raw markdown buffer on the bubble.
+        - Re-render the whole buffer to HTML each time (prevents <p>-per-chunk).
+        """
+        last_bubble = self.view.chat_stack.peek_most_recent()
+
+        if isinstance(last_bubble, ChatMessageBubble) and last_bubble.role == ChatRole.ASSISTANT:
+            chat_assistant_bubble = last_bubble
+        else:
+            chat_assistant_bubble = ChatMessageBubble(ChatRole.ASSISTANT, "")
+            self.view.chat_stack.add_bubble(chat_assistant_bubble)
+
+        # Re-render full message; do NOT concatenate HTML strings
+
+        chat_assistant_bubble.append_markdown(chunk)
