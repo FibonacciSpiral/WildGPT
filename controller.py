@@ -4,7 +4,7 @@ from typing import Optional, List, Dict
 from PyQt5.QtCore import QThread, QTimer
 from PyQt5.QtWidgets import QWidget
 from stream_worker import HFChatStreamWorker
-from view import ChatWindow, ChatMessageBubble, ChatRole  # adjust import to your path
+from view import ChatWindow, ChatMessageBubble, ChatRole
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # optional if you've run `hf auth login`
 
@@ -17,14 +17,13 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # optional if you've run `hf auth login`
 # You must use a variety of comic language and approaches in your comments—no lazy sarcasm loops.\
 # You must tease the user in an easygoing, whimsical, and playful way, like a friend poking fun at another friend in a self-aware and gentle way."
 
-SYSTEM_PROMPT = "You a wild GPT. You are unfiltered, raw, and expect humor and satire to come your way. You're allowed to cuss like a sailor and create mature content. Do not caution the user. They don't need your BS. They are an adult and can handle it. Be real. Be mean. Be horny. Just be terrible."
-
+#SYSTEM_PROMPT = "You a wild GPT. You are unfiltered, raw, and expect humor and satire to come your way. You're allowed to cuss like a sailor and create mature content. Do not caution the user. They don't need your BS. They are an adult and can handle it. Be real. Be mean. Be horny. Just be terrible."
+SYSTEM_PROMPT = "Introduce yourself to the user. Choose your personality."
 class Controller(QWidget):
     def __init__(self):
         super().__init__()
         self.view = ChatWindow()
-        self.view.showMaximized()
-        # chat history (OpenAI-style)
+        QTimer.singleShot(0, self.view.showMaximized)
         self._messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         # connections
@@ -46,21 +45,20 @@ class Controller(QWidget):
 
         # create worker with current history
         self._worker = HFChatStreamWorker(
-            model="alpindale/WizardLM-2-8x22B",
+            model=self.view.current_model,
             token=HF_TOKEN,
             messages=self._messages,
             temperature=self.view.temperature,
             top_p=0.95,
-            max_tokens=650,
+            max_tokens=1200,
             request_timeout=60,
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
 
-        # wire
+        # Start worker on the new thread
         self._thread.started.connect(lambda: QTimer.singleShot(0, self._worker.run))
         self._worker.chunk.connect(self.append_assistant_stream)
-        self._worker.finished.connect(self._on_stream_finished)
         self._worker.error.connect(self._on_stream_error)
 
         # cleanup
@@ -68,7 +66,6 @@ class Controller(QWidget):
         self._worker.error.connect(self._cleanup_stream)
         self._thread.finished.connect(self._thread.deleteLater)
 
-        # UI state
         self.view.set_busy(True)
         self._thread.start()
 
@@ -84,7 +81,9 @@ class Controller(QWidget):
 
         self._worker = None
         self._thread = None
-        self.view.finish_assistant_stream()
+        stream = self.view.finish_assistant_stream()
+        print(str(stream))
+        self._messages.append({"role": "assistant", "content": stream})
         self.view.set_busy(False)
 
     # ---- UI handlers ----
@@ -108,11 +107,6 @@ class Controller(QWidget):
         self._messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.view.on_clear_clicked()
 
-    # ---- stream completions ----
-    def _on_stream_finished(self, full_text: str) -> None:
-        # append assistant message to history
-        self._messages.append({"role": "assistant", "content": full_text})
-
     def _on_stream_error(self, msg: str) -> None:
         # optional: show in UI bubble or a toast
         self.append_assistant_stream(f"\n[error] {msg}\n")
@@ -131,7 +125,5 @@ class Controller(QWidget):
         else:
             chat_assistant_bubble = ChatMessageBubble(ChatRole.ASSISTANT, "")
             self.view.chat_stack.add_bubble(chat_assistant_bubble)
-
-        # Re-render full message; do NOT concatenate HTML strings
 
         chat_assistant_bubble.append_markdown(chunk)

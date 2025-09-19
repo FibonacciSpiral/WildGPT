@@ -57,7 +57,6 @@ def setup_logging() -> None:
         console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         _logger.addHandler(console)
 
-
 # --- Exception handling state/logic -----------------------------------------
 class _ExceptionManager:
     """Debounce and guard exception UI so you can close & continue.

@@ -2,8 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from PyQt5.QtCore import QTimer, QEvent, pyqtSignal, QSize
-from PyQt5.QtGui import QFont, QPalette, QColor, QFontMetricsF, QTextOption, QGuiApplication, QIcon
+from PyQt5.QtCore import QTimer, QEvent, pyqtSignal, QSize, Qt, QSizeF
+from PyQt5.QtGui import QFont, QPalette, QColor, QFontMetricsF, QTextOption, QGuiApplication, QIcon, QTextDocument
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -13,13 +13,15 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpacerItem, QWidget, QTextBrowser, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QToolButton,
+    QTextEdit, QSizePolicy, QWIDGETSIZE_MAX, QSplitter
 )
 from markdown_it import MarkdownIt
+import math
 
 # markdown parser is stateless and shared
 md = MarkdownIt()
 
-# ---- Light-weight role identifiers (kept here for typing only; real model lives elsewhere) ----
+# ---- Light-weight role identifiers ----
 @dataclass(frozen=True)
 class ChatRole:
     USER: str = "user"
@@ -154,32 +156,38 @@ class ThemeManager:
         }}
         
         QPushButton:pressed, QToolButton:pressed {{
-            background: {theme.button_bg_pressed}; /* Or define a separate click color in Theme if desired */
+            background: {theme.button_bg_pressed};
         }}
         QPushButton:disabled {{ color: #8b93a6; }}
 
         /* User bubble: ChatGPT style */
-        #bubbleFrame[variant="user"] {{
+        #ai_bubble[variant="user"] {{
             background: {theme.user_bubble_bg};
             color: {theme.text};
             border-radius: 30px;
             border: 3px solid {theme.border};
         }}
         /* Assistant bubble: ChatGPT style */
-        #bubbleFrame[variant="assistant"] {{
+        #ai_bubble[variant="assistant"] {{
             background: {theme.assistant_bubble_bg};
             color: {theme.text};
             border-radius: 50px;
             border: 1px solid {theme.border};
         }}
         
-        QTextBrowser#bubbleFrame {{
+        QTextBrowser#ai_bubble {{
             font-family: Inter, Segoe UI, Roboto, Arial;
             font-size: 30px;
             color: #eaeef2;
         }}
         
         #chatViewport {{ background: {theme.bg}; }}
+        
+            QWidget#inputPane {{
+            background: Transparent;
+            border-top: 2px solid #555;
+            padding: 8px;
+        }}
         """
 
 
@@ -193,80 +201,58 @@ class HSpacer(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)  # don’t block clicks
         self.setStyleSheet("background: transparent; border: none;")
 
-class ChatTextBrowser(QTextBrowser):
-    """
-    QTextBrowser that reports a size hint just large enough to fit its text
-    without wrapping (up to the widget's maximum width). Once the layout
-    constrains its width below that ideal, the widget wraps text and grows
-    vertically using height-for-width so that no scrollbars are needed.
-
-    Key points:
-      - sizeHint(): returns the minimal width that fits content in-place
-        (no wrapping), capped by maximumWidth(). Height is computed for that
-        width via heightForWidth().
-      - hasHeightForWidth()/heightForWidth(): provide a correct height for
-        any constrained width by temporarily shaping the QTextDocument to the
-        given width. This allows layouts to vertically expand the widget as it
-        gets narrower.
-      - Scrollbars are disabled; the widget is expected to resize instead.
-
-    Works best when placed in a QLayout that respects height-for-width.
-    """
-
+class MinimumSizeBrowser(QTextBrowser):
+    size_changed = pyqtSignal()
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setViewportMargins(15, 15, 15, 15)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.textChanged.connect(self._recompute_dimensions)
+        # simple cache for heightForWidth
+        self.recompute_size = True
+        self.setMinimumWidth(500)
+        self.current_w = self.minimumWidth()
+        self.current_h = self.minimumHeight()
 
         # Wrap to the widget width when constrained by the layout.
         self.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
-
-        # Prefer expanding horizontally until hitting max width; grow vertically as needed.
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-
         self.setOpenExternalLinks(True)
-        self.setReadOnly(True)
-        self.setFrameStyle(QFrame.NoFrame)
-
-        # these help center the text browser and add some padding
-        inset = 0  # your bubble’s inner padding
-        offset = 20
-        self.setViewportMargins(inset + offset, inset + offset, inset, inset)  # left top right bottom
-
+        self.setFrameShape(QFrame.NoFrame)
+        self.document().setUndoRedoEnabled(True)
         # We resize instead of scrolling.
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setObjectName("ai_bubble")
+        QTimer.singleShot(0, self._recompute_dimensions)
 
-        # Recompute geometry whenever the document changes.
-        self.document().documentLayout().documentSizeChanged.connect(self.updateGeometry)
-
-        self.setObjectName("bubbleFrame")
-        self._sync_doc()
-
-    # --- qt overrides -------------------------------------------------
-    def hasHeightForWidth(self) -> bool:  # type: ignore[override]
-        return True
-
-    def heightForWidth(self, w: int) -> int:  # type: ignore[override]
-        if w <= 0:
-            return super().height()
-
-        extra_w, extra_h = self._extra_margins()
-        content_w = max(0, w - extra_w)
-
-        doc = self.document()
-        old_tw = doc.textWidth()
-        try:
-            doc.setTextWidth(content_w)
-            doc_h = math.ceil(doc.size().height())
-        finally:
-            doc.setTextWidth(old_tw)
-        return int(doc_h + extra_h)
 
     def sizeHint(self) -> QSize:  # type: ignore[override]
+        return QSize(self.current_w, self.current_h)
+
+    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
+        return self.sizeHint()
+
+    def check_if_size_changed(self):
+        different = False
+        w = self.compute_min_w()
+
+        if self.current_w != w:
+            self.current_w = w
+            different =  True
+
+        h = self.compute_min_h(w)
+
+        if self.current_h != h:
+            self.current_h = h
+            different = True
+
+        return different
+
+    def compute_min_w(self):
         extra_w, _ = self._extra_margins()
         doc = self.document()
 
-        # Compute the ideal *unconstrained* content width (no wrapping).
         old_tw = doc.textWidth()
         try:
             doc.setTextWidth(-1)  # "unbounded"; lets idealWidth reflect natural width
@@ -274,116 +260,126 @@ class ChatTextBrowser(QTextBrowser):
         finally:
             doc.setTextWidth(old_tw)
 
-        # Target width = natural content width + chrome, but don't exceed max.
-        w = int(ideal_content_w + extra_w)
-        w = min(w, self.maximumWidth())
+        w = int(min(ideal_content_w + extra_w, self.maximumWidth()))
 
-        return QSize(w, self.heightForWidth(w))
+        if w + 10 >= self.maximumWidth():
+            w = self.maximumWidth()
 
-    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
-        # For this widget, the minimum usable size equals the natural hint.
-        return self.sizeHint()
+        return w
 
-    def changeEvent(self, e):
-        if e.type() in (
-            QEvent.FontChange,
-            QEvent.StyleChange,
-            QEvent.ApplicationFontChange,
-            QEvent.LayoutDirectionChange,
-        ):
-            self._sync_doc()
-            self.updateGeometry()
-        super().changeEvent(e)
+    def compute_min_h(self, w):
+        """ Return total widget height required to show all content at width *w*."""
+        if w <= 0:
+            # defensive: avoid negative sizes in pathological layouts
+            print("compute_min_h received a negative width")
+            return super().height()
 
-    def resizeEvent(self, e) -> None:  # type: ignore[override]
-        super().resizeEvent(e)
-        # Ensure layout reacts when the widget is resized by its parent.
-        self.updateGeometry()
+        if w > self.maximumWidth():
+            w = self.maximumWidth()
+            print("Width given is greater than max allowed!")
+
+        extra_w, extra_h = self._extra_margins()
+        content_w = max(0, w - extra_w)
+        doc = self.document()
+        old_tw = doc.textWidth()
+        try:
+            doc.setTextWidth(content_w)
+            doc_h = math.ceil(doc.size().height())
+        finally:
+            doc.setTextWidth(old_tw)
+
+        total_h = int(doc_h + extra_h)
+
+        # you must obey your boundaries!
+
+        if total_h < self.minimumHeight():
+            total_h = self.minimumHeight()
+
+        if total_h > self.maximumHeight():
+            total_h = self.maximumHeight()
+
+        return total_h
+
+    def _recompute_dimensions(self):
+        if self.check_if_size_changed():
+            QTimer.singleShot(0, self.updateGeometry)
+            QTimer.singleShot(0, self._size_changed)
+
+    def _size_changed(self):
+        self.size_changed.emit()
 
     # --- utilities ------------------------------------------------------
     def _extra_margins(self) -> tuple[int, int]:
-        """
-        Everything around the QTextDocument contents: widget contents margins,
-        frame width, and the QAbstractScrollArea viewport margins.
-        """
         m = self.contentsMargins()
-        vm = self.viewportMargins()          # <-- you were not counting these
+        vm = self.viewportMargins()
         fw = self.frameWidth()
-        extra_w = m.left() + m.right() + vm.left() + vm.right() + 2 * fw
-        extra_h = m.top() + m.bottom() + vm.top() + vm.bottom() + 2 * fw
+
+        sb_w = self.verticalScrollBar().sizeHint().width() if self.verticalScrollBar().isVisible() else 0
+        sb_h = self.horizontalScrollBar().sizeHint().height() if self.horizontalScrollBar().isVisible() else 0
+
+        print(f"M: Left: Right:{m.left()} + {m.right()} VM: Left: Right:{vm.left()} + {vm.right()}")
+
+        extra_w = m.left() + m.right() + vm.left() + vm.right() + fw * 2 + sb_w
+        extra_h = m.top() + m.bottom() + vm.top() + vm.bottom() + fw * 2 + sb_h
         return extra_w, extra_h
 
-    def _sync_doc(self):
-        doc = self.document()
-        # 1) Keep document font = widget font
-        if doc.defaultFont() != self.font():
-            doc.setDefaultFont(self.font())
 
-        # 2) Keep text options consistent with the widget
-        opt = doc.defaultTextOption()
-        changed = False
-        if opt.wrapMode() != self.wordWrapMode():
-            opt.setWrapMode(self.wordWrapMode())
-            changed = True
-        # Optional but helpful: consistent tabs with current font
-        desired_tabs = QFontMetricsF(self.font()).horizontalAdvance(' ') * 4
-        if abs(opt.tabStopDistance() - desired_tabs) > 0.5:
-            opt.setTabStopDistance(desired_tabs)
-            changed = True
-        if changed:
-            doc.setDefaultTextOption(opt)
+class MessageBubble(MinimumSizeBrowser):
 
-class inputBarBrowser(ChatTextBrowser):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setAcceptRichText(True)
+        self.setReadOnly(True)
+        self.setMouseTracking(True)
+
+
+class InputChatBubble(MinimumSizeBrowser):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptRichText(False)
         self.setReadOnly(False)
-        inset = 0  # your bubble’s inner padding
-        offset = 0
-        self.setViewportMargins(inset , inset, inset, inset + offset)  # left top right bottom
-
-    def heightForWidth(self, w: int) -> int:
-        parent_h = super().heightForWidth(w)
-        return parent_h + 15
-
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.textChanged.connect(lambda: QTimer.singleShot(0, self.ensureCursorVisible))
 
 class ChatMessageBubble(QFrame):
     """
-    The main message bubble class!
-    The ChatMessageBubble is a widget, horizontally laid out, which contains a spacer and the message bubble.
-    The message bubble is a widget that stacks the chat label, the message itself, and the actions row.
-    The messsage is actually a custom QTextBrowser which allows the type of resizing you would expect
-    from an AI chat bubble.
+    Stream-optimized message bubble.
+    Key: coalesce many small chunks and re-render at most every ~50–75ms.
     """
-    new_content = pyqtSignal()  # this is a signal that fires when new markdown content is available to display
+    new_content = pyqtSignal()
+
     def __init__(self, role: str, md_buffer: str, parent: QWidget = None):
         super().__init__(parent)
         self.role = role
         self._md_buffer = md_buffer
+        self._browser = MessageBubble()
+        self._browser.setHtml(md.render(self._md_buffer))
         self._build_ui()
         self._bubble.installEventFilter(self)
-        self._bubble.setMouseTracking(True)
         self.setMouseTracking(True)
-        self.new_content.connect(self.new_markdown_available)
+
+
+        # Coalesced renderer
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.timeout.connect(self._render_now)
+        self._render_interval_ms = 250
+        self._pending = False
 
     def _build_ui(self):
-        # Outer horizontal layout for left/right alignment
         msg_row = QHBoxLayout(self)
-        msg_row.setContentsMargins(8, 4, 8, 4)
-        msg_row.setSpacing(8)
+        msg_row.setContentsMargins(20, 20, 20, 20)
+        msg_row.setSpacing(20)
 
         # organizational widget to contain the components of a chat message bubble
         bubble = QWidget()
-        bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
-        bubble.setMinimumHeight(5)
+        bubble.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        bubble.setMinimumHeight(31)
 
         # vertical layout to put inside the bubble.
         msg_layout_vbox = QVBoxLayout(bubble)
-        msg_layout_vbox.setContentsMargins(12, 10, 12, 10)
+        msg_layout_vbox.setContentsMargins(12, 12, 12, 12)
         msg_layout_vbox.setSpacing(0)
-
-        # Text content
-        browser = ChatTextBrowser()
-        browser.setHtml(md.render(self._md_buffer))
 
         # Actions row layout for actions like copy
         actions_row = QHBoxLayout()
@@ -394,10 +390,8 @@ class ChatMessageBubble(QFrame):
         copy_button = QToolButton()
         copy_button.setText("Copy")
         copy_button.setVisible(False)
-
         copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self._md_buffer))
 
-        # add widgets to the layout
         actions_row.addWidget(HSpacer())
         actions_row.addWidget(copy_button)
 
@@ -406,13 +400,10 @@ class ChatMessageBubble(QFrame):
         actions_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         actions_container.setMinimumHeight(copy_button.sizeHint().height())
 
-        # add components to the frame
-        msg_layout_vbox.addWidget(browser)
+        msg_layout_vbox.addWidget(self._browser)
         msg_layout_vbox.addWidget(actions_container)
 
-        # message bubble is complete. align it right if user or left if assistant
-
-        browser.setProperty("variant", self.role)
+        self._browser.setProperty("variant", self.role)
 
         if self.role.lower() == "user":
             msg_row.addWidget(HSpacer())
@@ -421,207 +412,114 @@ class ChatMessageBubble(QFrame):
             msg_row.addWidget(bubble)
             msg_row.addWidget(HSpacer())
 
-        # Keep reference for resizing
         self._bubble = bubble
-        self._browser = browser
         self._copy_button = copy_button
 
     def resizeEvent(self, event):
-        """Ensure bubbles max width = 85% of parent width."""
         if self.parentWidget():
             cap = int(self.parentWidget().width() * 0.85)
             self._bubble.setMaximumWidth(cap)
+            self._browser.setMaximumWidth(cap)
         super().resizeEvent(event)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Enter:
             self._copy_button.setVisible(True)
-
         if event.type() == QEvent.Leave:
             self._copy_button.setVisible(False)
         return super().eventFilter(obj, event)
 
+    # --- streaming API -------------------------------------------------
     def append_markdown(self, chunk: str) -> None:
-        """Append a markdown chunk to the buffer."""
         self._md_buffer += chunk
-        self.new_content.emit()
+        # Coalesce rapid chunks; schedule a render if not already queued
+        if not self._render_timer.isActive():
+            self._render_timer.start(self._render_interval_ms)
+
+    def flush(self) -> None:
+        # Force an immediate render (e.g., on stream end)
+        if self._render_timer.isActive():
+            self._render_timer.stop()
+        self._render_now()
 
     def get_markdown(self) -> str:
-        """Return the raw markdown buffer."""
         return self._md_buffer
 
-    def new_markdown_available(self):
+    # --- internals -----------------------------------------------------
+    def _render_now(self) -> None:
+        # Avoid nested updates for smoother scrolling/layout
+        self._browser.setUpdatesEnabled(False)
         self._browser.setHtml(md.render(self._md_buffer))
-        self.updateGeometry()
+        self._browser.setUpdatesEnabled(True)
 
-
-# ---- Scroll area to hold messages ----
-class ChatScrollArea(QScrollArea):
-    def __init__(self, parent: Optional[QWidget] = None):
-        super().__init__(parent)
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.NoFrame)
-        self.viewport().setObjectName("chatViewport")
-        self._container = QWidget()
-        self._chat_stack_layout = QVBoxLayout(self._container)
-        self._chat_stack_layout.setContentsMargins(12, 12, 12, 12)
-        self._chat_stack_layout.setSpacing(6)
-        self._tail_spacer = QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Minimum)
-        self._chat_stack_layout.addItem(self._tail_spacer)
-        self.setWidget(self._container)
-
-    def add_bubble(self, bubble: ChatMessageBubble) -> None:
-        self._chat_stack_layout.insertWidget(self._chat_stack_layout.count() - 1, bubble)
-        QTimer.singleShot(0, self._after_layout_change)
-
-    def peek_most_recent(self) -> ChatMessageBubble | None:
-        idx = self._chat_stack_layout.count() - 2
-        w = self._chat_stack_layout.itemAt(idx).widget() if idx >= 0 else None
-        return w
-
-
-    def scroll_to_bottom(self) -> None:
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
-
-    def clear_messages(self) -> None:
-        # Remove all except the final stretch
-        for i in reversed(range(self._chat_stack_layout.count() - 1)):
-            item = self._chat_stack_layout.itemAt(i)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-        QTimer.singleShot(0, self._after_layout_change)
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        # Recompute tail spacer expansion to prevent scrollable blank space
-        self._update_tail_spacer()
-
-    def _after_layout_change(self) -> None:
-        self._update_tail_spacer()
-        self.scroll_to_bottom()
-
-    def _update_tail_spacer(self) -> None:
-        # Expand the tail spacer only when content is shorter than the viewport
-        content_h = self._chat_stack_layout.sizeHint().height()
-        vp_h = self.viewport().height()
-        vpol = QSizePolicy.Expanding if content_h < vp_h else QSizePolicy.Minimum
-        self._tail_spacer.changeSize(0, 0, QSizePolicy.Minimum, vpol)
-        self._chat_stack_layout.invalidate()
-        self._container.updateGeometry()
-
-
-# --- Drop-in: auto-growing text edit for the chat input bar ---
-import math
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QTextEdit, QSizePolicy
-
-class AutoGrowTextEdit(QTextEdit):
-    """
-    Grows vertically as the user types, between min_rows and max_rows.
-    Keeps scrollbars hidden until max_rows is reached.
-    """
-    def __init__(self, parent=None, min_rows: int = 2, max_rows: int = 8):
-        super().__init__(parent)
-        self._min_rows = max(1, min_rows)
-        self._max_rows = max(self._min_rows, max_rows)
-        self.setAcceptRichText(False)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        self.setMinimumHeight()
-
-    def _row_px(self) -> int:
-        # Use lineSpacing for better cross-font results
-        return self.fontMetrics().lineSpacing()
-
-    def _frame_and_margins(self) -> int:
-        # Sum frame + contents + document margins (top+bottom)
-        fw = self.frameWidth() * 2
-        cm = self.contentsMargins().top() + self.contentsMargins().bottom()
-        dm = int(self.document().documentMargin()) * 2
-        return fw + cm + dm
-
-    def _rows_to_height(self, rows: int) -> int:
-        return rows * self._row_px() + self._frame_and_margins()
-
-    def _doc_height(self) -> int:
-        # Ensure layout knows current width
-        self.document().setTextWidth(self.viewport().width())
-        size = self.document().documentLayout().documentSize()
-        return math.ceil(size.height()) + self._frame_and_margins()
-
-# ---- Input bar ----
 class ChatInputBar(QWidget):
-    # ChatInputBar signals
     userMsgSentSignal = pyqtSignal(str)
     stopRequested = pyqtSignal()
     clearRequested = pyqtSignal()
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        # UI elements
-        self.input_bar = inputBarBrowser()
-        self.send_btn = QPushButton("Send", self)
-        self.stop_btn = QPushButton("Stop", self)
-        self.clear_btn = QPushButton("Clear", self)
-        # build the layout
+        self.input_bubble = InputChatBubble(self)
+        self.input_bubble.setAcceptRichText(False)
+        self.input_bubble.setOpenExternalLinks(False)
+        self.input_bubble.setOpenLinks(False)
         self._build_ui()
-        # connect our signals and slots
         self.send_btn.clicked.connect(self.send_btn_clicked)
         self.stop_btn.clicked.connect(self.stopRequested)
         self.clear_btn.clicked.connect(self.clearRequested)
+        self.input_bubble.size_changed.connect(self.updateGeometry)
+        min_w = int(len("sdjfkdjfksajfskdjfksadjfkdjfkadsjfksdjfjsadfjksdjjsdkfjsdk"))
+        self.input_bubble.setMaximumWidth(min_w)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        self.input_bar.setPlaceholderText("Ask anything")
-        self.input_bar.setAcceptRichText(False)
-        self.input_bar.installEventFilter(self)
+        self.send_btn = QPushButton("Send", self)
+        self.stop_btn = QPushButton("Stop", self)
+        self.clear_btn = QPushButton("Clear", self)
+        rows = QVBoxLayout(self)
+        rows.setContentsMargins(12, 12, 12, 12)
+        rows.setSpacing(8)
+        self.input_bubble.setPlaceholderText("Ask anything")
+        self.input_bubble.installEventFilter(self)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self.stop_btn.setEnabled(False)
 
         btn_row.addWidget(self.clear_btn)
         btn_row.addWidget(HSpacer())
         btn_row.addWidget(self.stop_btn)
         btn_row.addWidget(self.send_btn)
 
-        self.btn_container = QWidget()
-        self.btn_container.setLayout(btn_row)
-        layout.addWidget(self.input_bar)
-        layout.addWidget(self.btn_container)
+        rows.addWidget(self.input_bubble)
+        rows.addLayout(btn_row)
 
     def send_btn_clicked(self) -> None:
-        text = self.input_bar.toPlainText().strip()
+        text = self.input_bubble.toPlainText().strip()
         if text:
             self.userMsgSentSignal.emit(text)
-            self.input_bar.clear()
+            self.input_bubble.clear()
 
     def set_busy(self, busy: bool) -> None:
         self.send_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
-        self.input_bar.setReadOnly(busy)
 
     # 'why': capture Enter vs Shift+Enter without stealing Tab navigation
     def eventFilter(self, obj, event):  # type: ignore[override]
-        if obj is self.input_bar and event.type() == QEvent.KeyPress:
+        if obj is self.input_bubble and event.type() == QEvent.KeyPress:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not (event.modifiers() & Qt.ShiftModifier):
                 self.send_btn_clicked()
                 return True
         return super().eventFilter(obj, event)
 
-    def resizeEvent(self, event):
+    def update_caps(self, w, h):
         """Ensure bubbles max width = 85% of parent width."""
-        if self.parentWidget():
-            cap = int(self.parentWidget().width() * 0.5)
-            self.input_bar.setMaximumWidth(cap)
-            self.input_bar.setMinimumWidth(cap)
-        super().resizeEvent(event)
+        cap_w = int(w * 0.60)
+        cap_h = int(h * 0.75)
+        self.input_bubble.setMaximumWidth(cap_w)
+        self.input_bubble.setMaximumHeight(cap_h)
+        self.setMaximumWidth(cap_w)
+        self.setMaximumHeight(cap_h)
 
 
-# -- REPLACE the entire TopBar class --
 class TopBar(QWidget):
     modelChanged = pyqtSignal(str)
     settingsChanged = pyqtSignal(dict)
@@ -709,6 +607,64 @@ class TopBar(QWidget):
             b.setFixedWidth(w + 100)
 
 
+# ---- Scroll area to hold messages ----
+class ChatScrollArea(QScrollArea):
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.viewport().setObjectName("chatViewport")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self._container = QWidget()
+        # important: container should not claim to expand vertically
+        self._container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+
+        self._chat_stack_layout = QVBoxLayout(self._container)
+        self._chat_stack_layout.setContentsMargins(8, 8, 8, 8)
+        self._chat_stack_layout.setSpacing(6)
+        self._chat_stack_layout.addStretch(1)
+
+        self.setWidget(self._container)
+
+    def add_bubble(self, bubble: ChatMessageBubble) -> None:
+        self._chat_stack_layout.insertWidget(self._chat_stack_layout.count() - 1, bubble)
+        QTimer.singleShot(0, self._after_layout_change)
+
+    def peek_most_recent(self) -> ChatMessageBubble | None:
+        idx = self._chat_stack_layout.count() - 2
+        w = self._chat_stack_layout.itemAt(idx).widget() if idx >= 0 else None
+        return w
+
+    def scroll_to_bottom(self) -> None:
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+    def clear_messages(self) -> None:
+        for i in reversed(range(self._chat_stack_layout.count() - 1)):
+            item = self._chat_stack_layout.itemAt(i)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        QTimer.singleShot(0, self._after_layout_change)
+
+    # def resizeEvent(self, e):
+    #     super().resizeEvent(e)
+    #     self._update_tail_spacer()
+
+    def _after_layout_change(self) -> None:
+      #  self._update_tail_spacer()
+        self.scroll_to_bottom()
+
+    # def _update_tail_spacer(self) -> None:
+    #     content_h = self._chat_stack_layout.sizeHint().height()
+    #     vp_h = self.viewport().height()
+    #     vpol = QSizePolicy.Expanding if content_h < vp_h else QSizePolicy.Minimum
+    #     self._tail_spacer.changeSize(0, 0, QSizePolicy.Minimum, vpol)
+    #     self._chat_stack_layout.invalidate()
+    #     self._container.updateGeometry()
+
+
 
 # ---- Main Chat Window (View) ----
 class ChatWindow(QMainWindow):
@@ -726,55 +682,68 @@ class ChatWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Wild GPT")
         self.setWindowIcon(QIcon("wildAI.ico"))
-        #components
-        self.topbar = TopBar(self)
-        self.chat_stack = ChatScrollArea(self)
-        self.input_bar = ChatInputBar(self)
-        # Typing indicator bubble (hidden when idle)
-        self.busy_indicator = QLabel("…", self)
-        #get to building...
         self._build_ui()
         self.set_theme(ThemeManager.DARK)
         self.current_model = "deepseek-ai/DeepSeek-V3-0324"
-        self.update_model(self.topbar.model_combo.currentText())
-        self.temperature = float(self.topbar.temp_spin.value())
+        self.update_model(self.top_bar.model_combo.currentText())
+        self.temperature = float(self.top_bar.temp_spin.value())
 
     def _build_ui(self) -> None:
         central = QWidget(self)
-        vbox = QVBoxLayout(central)
+        vbox = QVBoxLayout(central)  #maybe update to gridlayout?
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
+       # central.setStyleSheet("border: 1px dashed red;") #uncomment for layout debugging!
 
-        vbox.addWidget(self.topbar)
-        vbox.addWidget(self.chat_stack, 1)
-        vbox.addWidget(self.input_bar, 0, Qt.AlignHCenter)
+        self.top_bar = TopBar(self)
+        self.top_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.top_bar.setMaximumHeight(100)
+        self.chat_stack = ChatScrollArea(self)
+        self.chat_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self.input_bar = ChatInputBar(self)
+        self.input_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+
+        # if you still want the input bar horizontally centered, wrap it
+        self.input_pane = QWidget(self)
+        self.input_pane.setObjectName("inputPane")
+        hbox = QHBoxLayout(self.input_pane)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(0)
+        self.input_pane.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        hbox.addWidget(self.input_bar, 0, alignment=Qt.AlignHCenter)
+
+
+        # --- assemble main layout ---
+        vbox.addWidget(self.top_bar)
+        vbox.addWidget(self.chat_stack)
+        vbox.addWidget(self.input_pane)
         self.setCentralWidget(central)
 
-        # Wire outward
         self.input_bar.userMsgSentSignal.connect(self.sendMessage)
         self.input_bar.stopRequested.connect(self.stopRequested)
         self.input_bar.clearRequested.connect(self.clearRequested)
-        self.topbar.modelChanged.connect(self.update_model)
-        self.modelChanged.connect(self.update_model)
-        self.topbar.settingsChanged.connect(self.settingsChanged)
+        self.top_bar.modelChanged.connect(self.update_model)
+        self.top_bar.settingsChanged.connect(self.settingsChanged)
         self.settingsChanged.connect(self.update_settings)
 
-        self.busy_indicator.setAlignment(Qt.AlignLeft)
-        self.busy_indicator.setStyleSheet("color:#888; padding:6px 10px;")
-        self.busy_indicator.hide()
-
-    # -------- Public slots for Controller to manipulate the View --------
+    # -------- Public slots --------
     def add_user_message(self, text: str) -> None:
         self.chat_stack.add_bubble(ChatMessageBubble(ChatRole.USER, text))
 
     def add_assistant_message(self, text: str) -> None:
         self.chat_stack.add_bubble(ChatMessageBubble(ChatRole.ASSISTANT, text))
 
-    def finish_assistant_stream(self) -> None:
-        pass
+    def finish_assistant_stream(self) -> str:
+        # Ensure the last assistant bubble is fully rendered
+        last_bubble = self.chat_stack.peek_most_recent()
+        if isinstance(last_bubble, ChatMessageBubble) and last_bubble.role == ChatRole.ASSISTANT:
+            last_bubble.flush()
+            return last_bubble.get_markdown()
+        else:
+            return "Error"
 
     def set_busy(self, busy: bool) -> None:
-        self.input_bar.set_busy(busy)
+         self.input_bar.set_busy(busy)
 
     def set_theme(self, theme: Theme) -> None:
         """Public API to switch theme at runtime."""
@@ -784,11 +753,6 @@ class ChatWindow(QMainWindow):
 
     def clear_messages(self) -> None:
         self.chat_stack.clear_messages()
-
-    # busy indicator seems insane! We could just make the indicator visible/hidden rather than inserting and removing
-    # it's also very boring just ... that don't even move
-
-    # -------- Internal handlers --------
 
     def on_clear_clicked(self) -> None:
         self.clear_messages()
@@ -800,3 +764,7 @@ class ChatWindow(QMainWindow):
         for setting_name, value in new_settings.items():
             if setting_name == "temperature":
                 self.temperature = value
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.input_bar.update_caps(self.width(), self.height())

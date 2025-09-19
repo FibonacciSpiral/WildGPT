@@ -16,6 +16,7 @@ class HFChatStreamWorker(QObject):
     finished = pyqtSignal(str)           # full text
     error = pyqtSignal(str)
     state = pyqtSignal(str)
+    thinking = pyqtSignal(str)           # added: fix missing signal used in run()
 
     def __init__(
         self,
@@ -46,6 +47,7 @@ class HFChatStreamWorker(QObject):
 
     def run(self) -> None:
         try:
+            print("Beginning thread!")
             self.state.emit("busy")  # <— regular busy/connecting indicator ON
 
             client = InferenceClient(token=self._token, timeout=self._timeout, provider="featherless-ai")
@@ -110,8 +112,6 @@ class HFChatStreamWorker(QObject):
                     self.chunk.emit(piece)
                     continue
 
-                # (Optional) you can also watch role/tool_calls deltas, etc.
-
             final_answer = "".join(self._full_text_parts)
             final_reasoning = "".join(getattr(self, "_reasoning_parts", []))
             # If you want, expose the collected reasoning separately:
@@ -119,8 +119,10 @@ class HFChatStreamWorker(QObject):
 
             self.state.emit("done")
             self.finished.emit(final_answer)
+            print("Worker done!")
 
         except Exception as e:
             self.state.emit("error")
-            self.error.emit(str(e))
-
+            raise
+        finally:
+            self.state.emit("done")
