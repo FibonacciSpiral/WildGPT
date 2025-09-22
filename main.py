@@ -1,4 +1,4 @@
-# file: main.py
+
 """PyQt5 entrypoint with robust exception handling, GUI dialog, and file logging.
 
 Why this structure:
@@ -12,7 +12,6 @@ Why this structure:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import threading
 import time
@@ -20,10 +19,15 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt, QThread
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtCore import QThread
 
 from controller import Controller
+
+from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtWidgets import (
+    QApplication, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit,
+    QStyle, QHBoxLayout, QVBoxLayout, QSizePolicy
+)
 
 # --- Logging setup -----------------------------------------------------------
 LOG_DIR = Path.cwd() / "logs"
@@ -95,13 +99,7 @@ def exception_to_text(exc_type, exc_value, exc_tb) -> str:
     return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon
-from PyQt5.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit,
-    QPushButton, QStyle, QHBoxLayout, QVBoxLayout, QSizePolicy
-)
-
+# todo add a standard style sheet for the exceptionDialog
 class ExceptionDialog(QDialog):
     def __init__(self, message: str, details: str, parent=None):
         super().__init__(parent)
@@ -341,9 +339,9 @@ def main(argv: list[str]) -> int:
     if hasattr(threading, "excepthook"):
         def _thread_hook(args: threading.ExceptHookArgs) -> None:
             handle_exception(args.exc_type, args.exc_value, args.exc_traceback)
-        threading.excepthook = _thread_hook  # type: ignore[attr-defined]
+        threading.excepthook = _thread_hook
 
-    demo = Controller()
+    app.controller = Controller()  # app.controller is just a placeholder for Controller to live
     return app.exec_()
 
 
@@ -354,53 +352,3 @@ if __name__ == "__main__":
         # Last-resort guard for startup-time errors before hooks are active.
         handle_exception(*sys.exc_info())
         sys.exit(1)
-
-
-
-# def main():
-#     client = InferenceClient(token=HF_TOKEN)
-#
-#     # Chat history follows OpenAI-style roles
-#     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-#
-#     print(f"Connected to {MODEL}. Type 'exit' or 'quit' to leave.\n")
-#
-#     while True:
-#         try:
-#             user = input("You: ").strip()
-#         except (EOFError, KeyboardInterrupt):
-#             print("\nBye!")
-#             break
-#
-#         if user.lower() in {"exit", "quit"}:
-#             print("Bye!")
-#             break
-#         if not user:
-#             continue
-#
-#         # Append user message
-#         messages.append({"role": "user", "content": user})
-#
-#         # --- Non-streaming (simple) ---
-#         try:
-#             completion = client.chat.completions.create(
-#                 model=MODEL,
-#                 messages=messages,
-#                 max_tokens=500,      # adjust as you like
-#                 temperature=0.7,     # creativity
-#                 top_p=0.95,
-#             )
-#         except Exception as e:
-#             print(f"[error] {e}")
-#             # On some errors (e.g., token/permission), you may want to pop the last user msg
-#             messages.pop()
-#             continue
-#
-#         reply = completion.choices[0].message.content
-#         print(f"DeepSeek: {reply}\n")
-#
-#         # Add assistant reply to history so it has context for the next turn
-#         messages.append({"role": "assistant", "content": reply})
-#
-# if __name__ == "__main__":
-#     main()

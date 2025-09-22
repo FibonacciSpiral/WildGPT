@@ -1,7 +1,46 @@
+import multiprocessing as mp
 from typing import List, Dict, Optional
 
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal
 from huggingface_hub import InferenceClient
+from queue import Empty
+
+
+def talk_to_assistant(token, timeout, model, messages, temperature, top_p, max_tokens, result_queue):
+    try:
+        client = InferenceClient(token=token, timeout=timeout, provider="featherless-ai")
+
+        _STOP_SEQS = (
+            "<|im_end|>",
+            "<|eot_id|>",
+            "<|end_of_text|>",
+            "<|im_start|>user",
+            "<|im_start|>assistant",
+        )
+
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            stream=True,
+            stop=_STOP_SEQS,
+        )
+
+        for chunk in stream:
+            if not chunk or not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            txt = getattr(delta, "content", None)
+            if txt:
+                result_queue.put(("chunk", txt))
+
+        result_queue.put(("done", None))
+
+    except Exception as e:
+        result_queue.put(("error", e))
+        result_queue.put(("done", None))
 
 
 class HFChatStreamWorker(QObject):
@@ -13,10 +52,10 @@ class HFChatStreamWorker(QObject):
     - Call stop() to cancel mid-stream.
     """
     chunk = pyqtSignal(str)
-    finished = pyqtSignal(str)           # full text
-    error = pyqtSignal(str)
+    finished = pyqtSignal()
+    error = pyqtSignal(Exception)
     state = pyqtSignal(str)
-    thinking = pyqtSignal(str)           # added: fix missing signal used in run()
+    thinking = pyqtSignal(str)
 
     def __init__(
         self,
@@ -38,91 +77,80 @@ class HFChatStreamWorker(QObject):
         self._max_tokens = max_tokens
         self._timeout = request_timeout
         self._stopped = False
-        self._full_text_parts: List[str] = []
 
-    def stop(self) -> None:
-        # 'why': cooperative cancel; the API call is blocking between chunks,
-        # but we stop appending/emitting and bail at the next opportunity.
-        self._stopped = True
+        self._process: Optional[mp.Process] = None
+        self._queue: Optional[mp.Queue] = None
+        self._stop_event: Optional[mp.Event] = None
+
+    def stop(self):
+        if self._process and self._process.is_alive():
+            self._process.terminate()  # kill immediately
 
     def run(self) -> None:
+
+        self.state.emit("busy")
+
+        ctx = mp.get_context("spawn")
+        self._queue = ctx.Queue()
+
+        self._stop_event = ctx.Event()
+
+        self._process = mp.Process(
+            target=talk_to_assistant,
+            args=(self._token,
+                  self._timeout,
+                  self._model,
+                  self._messages,
+                  self._temperature,
+                  self._top_p,
+                  self._max_tokens,
+                  self._queue),
+            daemon=True
+        )
+
         try:
-            print("Beginning thread!")
-            self.state.emit("busy")  # <— regular busy/connecting indicator ON
+            self._process.start()
 
-            client = InferenceClient(token=self._token, timeout=self._timeout, provider="featherless-ai")
+            while True:
+                try:
+                    msg, payload = self._queue.get(timeout=0.1)
+                except Empty:
+                    if not self._process.is_alive():
+                        break
+                    continue
 
-            # If the model supports thinking, enable it via provider-specific params.
-            # (These are no-ops on models that don't support them.)
-            stream = client.chat.completions.create(
-                model=self._model,
-                messages=self._messages,
-                temperature=self._temperature,
-                top_p=self._top_p,
-                max_tokens=self._max_tokens,
-                stream=True,
-                # examples:
-                # OpenAI-style reasoning effort:
-                # extra_body={"reasoning": {"effort": "medium"}},
-                # Qwen/DeepSeek-style thinking switch:
-                # extra_body={"enable_thinking": True, "thinking_budget": 128},
-            )
-
-            got_any_tokens = False
-            got_answer_tokens = False
-            self._full_text_parts = []
-            self._reasoning_parts = []
-
-            for chunk in stream:
-                if self._stopped:
+                except (EOFError, OSError):
+                    # Child died abruptly; bail out.
                     break
-                if not chunk or not chunk.choices:
-                    continue
 
-                delta = chunk.choices[0].delta
+                if msg == "chunk":
+                    self.chunk.emit(payload)
+                elif msg == "error":
+                    self.error.emit(payload)
+                elif msg == "done":
+                    break
 
-                # 1) REASONING / THINKING STREAM (provider-dependent keys)
-                # vLLM / DeepSeek / Qwen-compatible:
-                rc = getattr(delta, "reasoning_content", None)
-                # Some providers nest it:
-                r = getattr(delta, "reasoning", None)
-                if r and hasattr(r, "content"):
-                    rc = (rc or "") + (r.content or "")
-
-                if rc:
-                    if not got_any_tokens:
-                        self.state.emit("thinking")  # <— switch UI to “thinking”
-                        got_any_tokens = True
-                    self._reasoning_parts.append(rc)
-                    self.thinking.emit(rc)  # <— emit to a separate area in your UI
-                    continue
-
-                # 2) NORMAL ANSWER CONTENT
-                piece = getattr(delta, "content", None)
-                if piece:
-                    if not got_any_tokens:
-                        self.state.emit("responding")  # got first token (no reasoning)
-                        got_any_tokens = True
-                    if not got_answer_tokens:
-                        # first answer token after thinking => switch to responding
-                        self.state.emit("responding")
-                        got_answer_tokens = True
-
-                    self._full_text_parts.append(piece)
-                    self.chunk.emit(piece)
-                    continue
-
-            final_answer = "".join(self._full_text_parts)
-            final_reasoning = "".join(getattr(self, "_reasoning_parts", []))
-            # If you want, expose the collected reasoning separately:
-            # self.reasoning_finished.emit(final_reasoning)
-
-            self.state.emit("done")
-            self.finished.emit(final_answer)
-            print("Worker done!")
-
-        except Exception as e:
-            self.state.emit("error")
-            raise
         finally:
+            try:
+                if self._process is not None:
+                    if self._process.is_alive():
+                        self._process.terminate()
+                    self._process.join(timeout=2)
+                    # .close() is available on spawn/forkserver contexts
+                    try:
+                        self._process.close()
+                    except Exception:
+                        pass
+            finally:
+                self._process = None
+
+            try:
+                if self._queue is not None:
+                    self._queue.close()
+                    self._queue.join_thread()
+            finally:
+                self._queue = None
+                self._stop_event = None
+
+            self.finished.emit()
             self.state.emit("done")
