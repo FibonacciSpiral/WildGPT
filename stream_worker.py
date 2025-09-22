@@ -93,8 +93,6 @@ class HFChatStreamWorker(QObject):
         ctx = mp.get_context("spawn")
         self._queue = ctx.Queue()
 
-        self._stop_event = ctx.Event()
-
         self._process = mp.Process(
             target=talk_to_assistant,
             args=(self._token,
@@ -150,7 +148,6 @@ class HFChatStreamWorker(QObject):
                     self._queue.join_thread()
             finally:
                 self._queue = None
-                self._stop_event = None
 
             self.finished.emit()
             self.state.emit("done")

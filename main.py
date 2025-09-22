@@ -29,6 +29,9 @@ from PyQt5.QtWidgets import (
     QStyle, QHBoxLayout, QVBoxLayout, QSizePolicy
 )
 
+# --- GUI-thread bridge for showing the dialog ---------------------------------
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
+
 # --- Logging setup -----------------------------------------------------------
 LOG_DIR = Path.cwd() / "logs"
 LOG_FILE = LOG_DIR / "errors.log"
@@ -172,6 +175,13 @@ class ExceptionDialog(QDialog):
         # Default focus & button
         close_btn.setDefault(True)
 
+        # main.py ExceptionDialog.__init__
+        self.setObjectName("ExceptionDialog")
+        msg_lbl.setObjectName("message")
+        sub_lbl.setObjectName("subtitle")
+        icon_lbl.setObjectName("icon")
+        details_edit.setObjectName("details")
+
         # --- per-class stylesheet (scoped to this dialog subtree) ---
         self.setStyleSheet("""
                /* Root dialog */
@@ -232,11 +242,6 @@ def show_exception_dialog(message: str, details: str) -> str:
 
 
 _handling_guard = False  # low-level recursion guard only
-
-
-# --- GUI-thread bridge for showing the dialog ---------------------------------
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
-
 
 
 class _DialogBridge(QObject):

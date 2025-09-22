@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import webbrowser
 from dataclasses import dataclass
 from typing import Optional
 
@@ -19,8 +20,18 @@ from PyQt5.QtWidgets import (
 )
 from markdown_it import MarkdownIt
 
+from urllib.parse import urlparse
+
+def safe_open(url):
+    scheme = urlparse(url.toString()).scheme.lower()
+    if scheme in ("http", "https"):
+        webbrowser.open(url.toString())
+    else:
+        print(f"Ignored unsafe link: {url.toString()}")
+
 # markdown parser is stateless and shared
 md = MarkdownIt()
+md = md.disable(["html_block", "html_inline"])
 
 # ---- Light-weight role identifiers ----
 @dataclass(frozen=True)
@@ -57,7 +68,7 @@ class ThemeManager:
     DARK = Theme(
         name="Dark",
         font_family="Inter, Segoe UI, Roboto, Arial",
-        font_size=25,
+        font_size=QGuiApplication.font().pointSize(),
         widget_padding=10,
         widget_radius=20,
         bg="#0f1115",
@@ -172,7 +183,6 @@ class ThemeManager:
             image: url("star2.png");
             width: 60px;
             height: 60px;
-            /* NOTE: Uses default platform arrow to avoid external assets */
         }}
         
         /* Popup list view */
@@ -231,7 +241,7 @@ class ThemeManager:
         QTextBrowser#ai_bubble {{
             background: rgba(85, 82, 82, 0.61);
             font-family: Inter, Segoe UI, Roboto, Arial;
-            font-size: 30px;
+            font-size: {theme.font_size}px;
             color: #eaeef2;
         }}    
         
@@ -289,7 +299,10 @@ class MinimumSizeBrowser(QTextBrowser):
         self.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
 
-        self.setOpenExternalLinks(True)
+        self.setOpenExternalLinks(False)
+        self.setOpenLinks(False)
+        self.anchorClicked.connect(safe_open)
+
         self.document().setUndoRedoEnabled(False)
         self.setFrameShape(QFrame.NoFrame)
         # We resize instead of scrolling.
@@ -419,7 +432,7 @@ class InputChatBubble(MinimumSizeBrowser):
         super().__init__(parent)
         self.setReadOnly(False)
         self.document().setUndoRedoEnabled(True)
-        self.setOpenExternalLinks(False)
+        self.setAcceptRichText(False)
 
 class ChatMessageFrame(QFrame):
     """
@@ -529,7 +542,7 @@ class ChatMessageFrame(QFrame):
         if self.parentWidget():                                                  # ▲      ▲
             w = int(self.parentWidget().width() * 0.75)                          # ▲ ▲   ▲ ▲
             h = int(float(w) * 0.618)                   # Follow the ratio       # ▲▲ ▲ ▲ ▲ ▲ ▲▲
-            self._browser.setMaximumWidth(w)  # and on the browser object itself
+            self._browser.setMaximumWidth(w)
             self._browser.setMaximumHeight(h)
 
     def _preprocess_think_blocks(self, text: str) -> str:
@@ -555,9 +568,6 @@ class ChatInputBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.input_bubble = InputChatBubble(self)
-        self.input_bubble.setAcceptRichText(False)
-        self.input_bubble.setOpenExternalLinks(False)
-        self.input_bubble.setOpenLinks(False)
         self._build_ui()
         self.send_btn.clicked.connect(self.send_btn_clicked)
         self.stop_btn.clicked.connect(self.stopRequested)
@@ -570,7 +580,7 @@ class ChatInputBar(QWidget):
         rows = QVBoxLayout(self)
         rows.setContentsMargins(12, 12, 12, 12)
         rows.setSpacing(8)
-        self.input_bubble.setPlaceholderText("Ask anything")
+        self.input_bubble.setPlaceholderText("Ask anything. Really.")
         self.input_bubble.installEventFilter(self)
 
         btn_row = QHBoxLayout()
@@ -604,7 +614,7 @@ class ChatInputBar(QWidget):
 
     def update_boundaries(self, w, h):
         cap_w = int(w * 0.65)
-        cap_h = int(h * 0.85)
+        cap_h = int(h * 0.45)
         # on the browser object, setting max width, and max height
         self.input_bubble.setMaximumWidth(cap_w)
         self.input_bubble.setMaximumHeight(cap_h)
@@ -848,7 +858,7 @@ class ChatWindow(QMainWindow):
         self.top_bar.setMaximumHeight(100)
         self.chat_stack = ChatScrollArea(self)
         self.input_bar = ChatInputBar(self)
-        self.input_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.input_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         # if you still want the input bar horizontally centered, wrap it
         self.input_pane = QWidget(self)
