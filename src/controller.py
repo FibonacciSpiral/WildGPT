@@ -5,8 +5,8 @@ from typing import Optional, List, Dict
 from PyQt5.QtCore import QThread, QTimer
 from PyQt5.QtWidgets import QWidget
 
-from stream_worker import HFChatStreamWorker
-from view import ChatWindow
+from src.stream_worker import HFChatStreamWorker
+from src.view import ChatWindow
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # optional if you've run `hf auth login`
 

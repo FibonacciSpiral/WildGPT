@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QThread
 
-from controller import Controller
+
 
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
@@ -31,6 +31,8 @@ from PyQt5.QtWidgets import (
 
 # --- GUI-thread bridge for showing the dialog ---------------------------------
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
+
+from src.controller import Controller
 
 # --- Logging setup -----------------------------------------------------------
 LOG_DIR = Path.cwd() / "logs"
