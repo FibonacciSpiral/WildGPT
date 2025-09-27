@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PyQt5.QtCore import QTimer, QEvent, pyqtSignal, QSize, Qt
-from PyQt5.QtGui import QFont, QPalette, QColor, QTextOption, QGuiApplication, QIcon, QTextCursor
+from PyQt5.QtGui import QFont, QPalette, QColor, QTextOption, QGuiApplication, QIcon, QTextCursor, QTextDocument, \
+    QPainter
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -272,7 +273,6 @@ class ThemeManager:
         
         """
 
-
 class HSpacer(QWidget):
     """
     Horizontal spacer that can be used to help align widgets
@@ -282,6 +282,50 @@ class HSpacer(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)  # todo make sure this is okay
         self.setAttribute(Qt.WA_TransparentForMouseEvents)  # don’t block clicks
         self.setStyleSheet("background: transparent; border: none;")
+
+class TypingIndicator(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.dot_count = 3
+        self.current_frame = 0
+        self.dot_radius = 26
+        self.spacing = 50
+        self.color = QColor(255, 255, 255, int(0.5 * 255))
+        self.timer = QTimer(self)
+        QTimer.singleShot(10, self.update_frame)
+
+        self.setMinimumSize(self.spacing * (self.dot_count-1) + self.dot_radius * self.dot_count + 15, self.dot_radius + self.spacing * 2)
+
+    def update_frame(self):
+        if self.current_frame >= self.dot_count:
+            QTimer.singleShot(200, self.update_frame)
+        else:
+            QTimer.singleShot(75, self.update_frame)
+
+        self.update()  # triggers paintEvent
+
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        center_y = self.height() // 2
+        total_width = (self.dot_count - 1) * self.spacing + self.dot_radius
+        start_x = (self.width() - total_width) // 2
+
+        for i in range(self.dot_count):
+            x = start_x + i * self.spacing
+            offset = -20 if i == self.current_frame else 0  # bounce effect
+            painter.setBrush(self.color)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(
+                x - self.dot_radius // 2,
+                center_y + offset - self.dot_radius // 2,
+                self.dot_radius,
+                self.dot_radius
+            )
+        self.current_frame += 1
+        if self.current_frame > self.dot_count:
+            self.current_frame = 0
+
 
 class MinimumSizeBrowser(QTextBrowser):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -311,11 +355,7 @@ class MinimumSizeBrowser(QTextBrowser):
         self.setAcceptRichText(True)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
 
-        self.textChanged.connect(self._recompute_dimensions)
-
         self.document().setDocumentMargin(0)
-
-        QTimer.singleShot(0, self._recompute_dimensions)
 
     def sizeHint(self) -> QSize:  # type: ignore[override]
         return QSize(self.current_w, self.current_h)
@@ -397,7 +437,7 @@ class MinimumSizeBrowser(QTextBrowser):
 
         return total_h
 
-    def _recompute_dimensions(self):
+    def recompute_dimensions(self):
         if self.check_if_size_changed():
             self.updateGeometry()
 
@@ -450,17 +490,32 @@ class InputChatBubble(MinimumSizeBrowser):
         self.setAcceptRichText(False)
         self.textChanged.connect(lambda: QTimer.singleShot(0, self.ensureCursorVisible))
         self.setFocusPolicy(Qt.StrongFocus)
+        self.textChanged.connect(self.recompute_dimensions)
+        QTimer.singleShot(0, self.recompute_dimensions)
 
+class MessageFrame(QFrame):
+    def __init__(self, role: str, parent: QWidget = None):
+        super().__init__(parent)
+        self.role = role
+        # todo make the progress bubble look nicer.
 
-class ChatMessageFrame(QFrame):
+class ProgressIndicator(MessageFrame):
+    def __init__(self, role: str, parent: QWidget = None):
+        super().__init__(role, parent)
+        msg_frame_hbox = QHBoxLayout(self)  # layout self horizontally
+        msg_frame_hbox.setContentsMargins(20, 20, 20, 20)
+        msg_frame_hbox.setSpacing(20)
+        msg_frame_hbox.addWidget(TypingIndicator(self))
+        msg_frame_hbox.addWidget(HSpacer(self))
+
+class ChatMessageFrame(MessageFrame):
     """
     Stream-optimized message bubble.
     """
     new_content = pyqtSignal()
 
     def __init__(self, role: str, md_buffer: str="", parent: QWidget = None):
-        super().__init__(parent)
-        self.role = role
+        super().__init__(role, parent)
         self._md_buffer = md_buffer
         self._build_ui()
         self._bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
@@ -530,8 +585,10 @@ class ChatMessageFrame(QFrame):
     def append_markdown(self, chunk: str) -> None:
         self._md_buffer += chunk
         current_val = self._browser.verticalScrollBar().value()
-        self._browser.setUpdatesEnabled(False)
-        self._browser.setHtml(md.render(self._md_buffer))
+        doc = QTextDocument()
+        doc.setHtml(md.render(self._md_buffer))  # parse off-screen
+        self._browser.setDocument(doc)  # cheap swap
+        self.update_all_geometry()
         if self._browser.autoscroll is True:
             c = self._browser.textCursor()
             c.movePosition(QTextCursor.End)
@@ -539,14 +596,23 @@ class ChatMessageFrame(QFrame):
             self._browser.ensureCursorVisible()
         else:
             self._browser.verticalScrollBar().setValue(current_val)
-        self._browser.setUpdatesEnabled(True)
 
     def get_markdown(self) -> str:
         return self._md_buffer
 
     def set_markdown(self, text) -> None:
         self._md_buffer = text
-        self._browser.setHtml(md.render(text))
+        doc = QTextDocument()
+        doc.setHtml(md.render(text))  # parse off-screen
+
+        self._browser.setDocument(doc)  # cheap swap
+
+        self.update_all_geometry()
+
+    def update_all_geometry(self):
+        self._browser.recompute_dimensions()
+        self._bubble.updateGeometry()
+        self.updateGeometry()
 
     def _update_boundaries(self):                                                 #        ▲
         if self.parentWidget():                                                  # ▲      ▲
@@ -761,7 +827,7 @@ class ChatScrollArea(QScrollArea):
         # If this is a plain QWidget container, ensure the style engine paints its bg:
         self.setAttribute(Qt.WA_StyledBackground, True)
 
-    def _append_bubble_to_stack(self, bubble: ChatMessageFrame) -> None:
+    def _append_bubble_to_stack(self, bubble: MessageFrame) -> None:
         """
         Simply inserts a bubble at the bottom of the chat stack
         :param bubble:
@@ -779,7 +845,15 @@ class ChatScrollArea(QScrollArea):
         self._append_bubble_to_stack(bubble)
         return bubble
 
-    def insert_bubble_at_idx(self, bubble: ChatMessageFrame, idx: int) -> None:
+    def append_progress_indicator_to_stack(self):
+        indicator = ProgressIndicator(ChatRole.SYSTEM)
+        self._append_bubble_to_stack(indicator)  # make sure the assistant is able to append html
+        return indicator    # probably does not need to return the indicator...
+
+    def remove_most_recent(self) -> bool:
+        return self.remove_bubble_at_idx(self._chat_stack_layout.count() - 2)
+
+    def insert_bubble_at_idx(self, bubble: MessageFrame, idx: int) -> None:
         """
         Inserts a bubble wherever you want, provided the idx is valid
         :param bubble:
@@ -793,11 +867,33 @@ class ChatScrollArea(QScrollArea):
         self._chat_stack_layout.insertWidget(idx, bubble)
         QTimer.singleShot(50, self.scroll_to_bottom)
 
-    def peek_most_recent(self) -> ChatMessageFrame | None:
+    def remove_bubble_at_idx(self, idx: int) -> bool:
+        """
+        Removes a bubble wherever you want, provided the idx is valid
+        :param idx:
+        :return:
+        """
+        success = False
+        bottom_of_stack = self._chat_stack_layout.count() - 1
+        if idx > bottom_of_stack or idx < 0:
+            print("wtf you doin bro? you cannot remove a non existent bubble")
+            return None
+
+        bubble = self._chat_stack_layout.itemAt(idx).widget()
+        if bubble is not None:
+            self._chat_stack_layout.removeWidget(bubble)
+            bubble.setParent(None)
+            bubble.deleteLater()
+            success = True
+
+        QTimer.singleShot(50, self.scroll_to_bottom)
+        return success
+
+    def peek_most_recent(self) -> MessageFrame | None:
         idx = self._chat_stack_layout.count() - 2
         return self.get_frame_at_idx(idx)
 
-    def get_frame_at_idx(self, idx) -> ChatMessageFrame | None:
+    def get_frame_at_idx(self, idx) -> MessageFrame | None:
         if idx >= 0:
             w = self._chat_stack_layout.itemAt(idx).widget()
         else:
@@ -809,10 +905,17 @@ class ChatScrollArea(QScrollArea):
 
         if isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.ASSISTANT:
             chat_assistant_bubble = last_bubble
+            chat_assistant_bubble.append_markdown(chunk)
+        elif isinstance(last_bubble, MessageFrame) and last_bubble.role == ChatRole.SYSTEM:
+            success = self.remove_most_recent()  # get rid of system bubble which is likely a progress indicator
+            if success:
+                self.append_to_assistant(chunk)
+            else:
+                print("Failed to system bubble!")
+        elif isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.USER:
+            self.append_assistant_bubble_to_stack(chunk)
         else:
-            chat_assistant_bubble = self.append_assistant_bubble_to_stack(chunk)
-
-        chat_assistant_bubble.append_markdown(chunk)
+            print("hmmm if this happens, well you broke the code buddy. FIX IT")
 
     def finish_assistant_stream(self):
         last_bubble = self.peek_most_recent()
@@ -898,6 +1001,9 @@ class ChatWindow(QMainWindow):
     # -------- Public slots --------
     def add_user_message(self, text: str) -> None:
         self.chat_stack.append_user_bubble_to_stack(text)
+
+    def add_progress_indicator(self)-> None:
+        self.chat_stack.append_progress_indicator_to_stack()
 
     def append_assistant_stream(self, chunk) -> None:
         self.chat_stack.append_to_assistant(chunk)
