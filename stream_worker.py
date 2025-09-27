@@ -85,10 +85,11 @@ class HFChatStreamWorker(QObject):
     def stop(self):
         if self._process and self._process.is_alive():
             self._process.terminate()  # kill immediately
+            print("killing process now")
+            self._stopped = True
 
     def run(self) -> None:
 
-        self.state.emit("busy")
 
         ctx = mp.get_context("spawn")
         self._queue = ctx.Queue()
@@ -126,6 +127,8 @@ class HFChatStreamWorker(QObject):
                 elif msg == "error":
                     self.error.emit(payload)
                 elif msg == "done":
+                    break
+                elif self._stopped is True:
                     break
 
         finally:

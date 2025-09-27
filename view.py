@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PyQt5.QtCore import QTimer, QEvent, pyqtSignal, QSize, Qt
-from PyQt5.QtGui import QFont, QPalette, QColor, QTextOption, QGuiApplication, QIcon
+from PyQt5.QtGui import QFont, QPalette, QColor, QTextOption, QGuiApplication, QIcon, QTextCursor
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -22,16 +22,16 @@ from markdown_it import MarkdownIt
 
 from urllib.parse import urlparse
 
+# Markdown parser is stateless and shared
+md = MarkdownIt()
+md = md.disable(["html_block", "html_inline"])
+
 def safe_open(url):
     scheme = urlparse(url.toString()).scheme.lower()
     if scheme in ("http", "https"):
         webbrowser.open(url.toString())
     else:
         print(f"Ignored unsafe link: {url.toString()}")
-
-# markdown parser is stateless and shared
-md = MarkdownIt()
-md = md.disable(["html_block", "html_inline"])
 
 # ---- Light-weight role identifiers ----
 @dataclass(frozen=True)
@@ -73,10 +73,10 @@ class ThemeManager:
         widget_radius=20,
         bg="#0f1115",
         text="#eaeef2",
-        panel="rgba(47, 47, 47, 0.25);",
+        panel="rgba(47, 47, 47, 0.4);",
         border="rgba(182, 182, 196, 0.25);",
-        input_bg="Transparent",
-        button_bg="Transparent",
+        input_bg="rgba(85, 82, 82, 0.2)",
+        button_bg="rgba(85, 82, 82, 0.2)",
         button_bg_hover="#252d40",
         button_bg_pressed="#191e2a",
         button_border="#2a3142",
@@ -84,7 +84,7 @@ class ThemeManager:
         accent2="#3a5fff",
         selection="#2a3553",
         user_bubble_bg="rgba(78, 44, 102, 0.25);",
-        assistant_bubble_bg="rgba(90, 87, 63, 0.25);",
+        assistant_bubble_bg="rgba(90, 87, 63, 0.35);",
     )
 
     LIGHT = Theme(
@@ -155,7 +155,7 @@ class ThemeManager:
             border-radius: {theme.widget_radius}px;
             padding: {theme.widget_padding}px {theme.widget_padding}px;
             min-height: 28px;
-            selection-background-color: rgba(255, 85, 0, 0.3);
+            selection-background-color: rgba(255, 85, 0, 0.2);
         }}
         
         QComboBox:hover {{
@@ -239,7 +239,7 @@ class ThemeManager:
         }}
         
         QTextBrowser#ai_bubble {{
-            background: rgba(85, 82, 82, 0.61);
+            background: rgba(85, 82, 82, 0.7);
             font-family: Inter, Segoe UI, Roboto, Arial;
             font-size: {theme.font_size}px;
             color: #eaeef2;
@@ -250,7 +250,7 @@ class ThemeManager:
             border-top: 2px solid rgba(255, 255, 255, 0.2);
             padding: 8px;
         }}
-        
+
         QTextBrowser QScrollBar:vertical {{
             width: 0px;
             margin: 0;
@@ -301,7 +301,7 @@ class MinimumSizeBrowser(QTextBrowser):
 
         self.setOpenExternalLinks(False)
         self.setOpenLinks(False)
-        self.anchorClicked.connect(safe_open)
+        self.anchorClicked.connect(safe_open)  # todo not fully tested this one
 
         self.document().setUndoRedoEnabled(False)
         self.setFrameShape(QFrame.NoFrame)
@@ -312,7 +312,6 @@ class MinimumSizeBrowser(QTextBrowser):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
 
         self.textChanged.connect(self._recompute_dimensions)
-        self.textChanged.connect(lambda: QTimer.singleShot(0, self.ensureCursorVisible))
 
         self.document().setDocumentMargin(0)
 
@@ -361,7 +360,7 @@ class MinimumSizeBrowser(QTextBrowser):
 
         return w
 
-    def compute_min_h(self, w):
+    def compute_min_h(self, w) -> int:
         """ Return total widget height required to show all content at width *w*."""
         if w <= 0:
             # defensive: avoid negative sizes in pathological layouts
@@ -418,6 +417,14 @@ class MinimumSizeBrowser(QTextBrowser):
         extra_h = m.top() + m.bottom() + vm.top() + vm.bottom() + fw * 2 + sb_h
         return extra_w, extra_h
 
+    def wheelEvent(self, event):
+        # Block zooming if Ctrl is held (prevents Ctrl+wheel font zoom)
+        if event.modifiers() & Qt.ControlModifier:
+            event.ignore()
+            return
+        # Otherwise allow normal scrolling
+        super().wheelEvent(event)
+
 
 class MessageBubble(MinimumSizeBrowser):
 
@@ -425,7 +432,15 @@ class MessageBubble(MinimumSizeBrowser):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setMouseTracking(True)
+        self.autoscroll = True
 
+    def wheelEvent(self, event):
+        super().wheelEvent(event)
+        self._on_scroll()
+
+    def _on_scroll(self):
+        sb = self.verticalScrollBar()
+        self.autoscroll = (sb.value() == sb.maximum())
 
 class InputChatBubble(MinimumSizeBrowser):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -433,11 +448,13 @@ class InputChatBubble(MinimumSizeBrowser):
         self.setReadOnly(False)
         self.document().setUndoRedoEnabled(True)
         self.setAcceptRichText(False)
+        self.textChanged.connect(lambda: QTimer.singleShot(0, self.ensureCursorVisible))
+        self.setFocusPolicy(Qt.StrongFocus)
+
 
 class ChatMessageFrame(QFrame):
     """
     Stream-optimized message bubble.
-    Key: coalesce many small chunks and re-render at most every ~50–75ms.
     """
     new_content = pyqtSignal()
 
@@ -447,6 +464,7 @@ class ChatMessageFrame(QFrame):
         self._md_buffer = md_buffer
         self._build_ui()
         self._bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         # setup the copy button stuff (may move this to a helper later)
         self._copy_button.setText("Copy")
         self._copy_button.setVisible(False)
@@ -455,14 +473,10 @@ class ChatMessageFrame(QFrame):
         self._bubble.installEventFilter(self)
         self.setMouseTracking(True)
 
-        # Coalesced renderer
-        self._render_timer = QTimer(self)
-        self._render_timer.setSingleShot(True)
-        self._render_timer.timeout.connect(self._render_now)
-        self._render_interval_ms = 200
         self._pending = False
         self._update_boundaries()
-        self.start_render()
+        QTimer.singleShot(10, lambda: self.set_markdown(md_buffer))
+
 
     def _build_ui(self):
         msg_frame_hbox = QHBoxLayout(self)  # layout self horizontally
@@ -481,7 +495,7 @@ class ChatMessageFrame(QFrame):
         browser = MessageBubble(bubble)
         actions_row = QWidget(bubble)
 
-        actions_row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed) # todo maybe consider the minimum height
+        actions_row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
         # horizontally layout the action row
         actions_row_hbox = QHBoxLayout(actions_row)
@@ -515,28 +529,24 @@ class ChatMessageFrame(QFrame):
 
     def append_markdown(self, chunk: str) -> None:
         self._md_buffer += chunk
-
-    def start_render(self):
-        if not self._render_timer.isActive():
-            self._render_timer.start(self._render_interval_ms)
+        current_val = self._browser.verticalScrollBar().value()
+        self._browser.setUpdatesEnabled(False)
+        self._browser.setHtml(md.render(self._md_buffer))
+        if self._browser.autoscroll is True:
+            c = self._browser.textCursor()
+            c.movePosition(QTextCursor.End)
+            self._browser.setTextCursor(c)
+            self._browser.ensureCursorVisible()
+        else:
+            self._browser.verticalScrollBar().setValue(current_val)
+        self._browser.setUpdatesEnabled(True)
 
     def get_markdown(self) -> str:
         return self._md_buffer
 
     def set_markdown(self, text) -> None:
         self._md_buffer = text
-        self.render_now()
-
-    def stop_rendering(self) -> None:
-        self._render_timer.stop()
-
-    # --- internals -----------------------------------------------------
-    def _render_now(self) -> None:
-        # Avoid nested updates for smoother scrolling/layout
-        self._browser.setUpdatesEnabled(False)
-       # processed = self.preprocess_think_blocks(self._md_buffer)
-        self._browser.setHtml(md.render(self._md_buffer))
-        self._browser.setUpdatesEnabled(True)
+        self._browser.setHtml(md.render(text))
 
     def _update_boundaries(self):                                                 #        ▲
         if self.parentWidget():                                                  # ▲      ▲
@@ -572,6 +582,8 @@ class ChatInputBar(QWidget):
         self.send_btn.clicked.connect(self.send_btn_clicked)
         self.stop_btn.clicked.connect(self.stopRequested)
         self.clear_btn.clicked.connect(self.clearRequested)
+        self.busy_state = False
+        QTimer.singleShot(0, self.input_bubble.setFocus)
 
     def _build_ui(self) -> None:
         self.send_btn = QPushButton("Send", self)
@@ -595,6 +607,8 @@ class ChatInputBar(QWidget):
         rows.addLayout(btn_row)
 
     def send_btn_clicked(self) -> None:
+        if self.busy_state is True:  # we don't send stuff if the assistant is busy chatting
+            return
         text = self.input_bubble.toMarkdown()
         if text:
             self.userMsgSentSignal.emit(text)
@@ -603,6 +617,7 @@ class ChatInputBar(QWidget):
     def set_busy(self, busy: bool) -> None:
         self.send_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(busy)
+        self.busy_state = busy
 
     # 'why': capture Enter vs Shift+Enter without stealing Tab navigation
     def eventFilter(self, obj, event):  # type: ignore[override]
@@ -756,8 +771,7 @@ class ChatScrollArea(QScrollArea):
 
     def append_assistant_bubble_to_stack(self, text="") -> ChatMessageFrame:
         bubble = ChatMessageFrame(ChatRole.ASSISTANT, text)
-        self._append_bubble_to_stack(bubble)
-        bubble.start_render()
+        self._append_bubble_to_stack(bubble)  #make sure the assistant is able to append html
         return bubble
 
     def append_user_bubble_to_stack(self, text):
@@ -796,15 +810,13 @@ class ChatScrollArea(QScrollArea):
         if isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.ASSISTANT:
             chat_assistant_bubble = last_bubble
         else:
-            chat_assistant_bubble = self.append_assistant_bubble_to_stack()
+            chat_assistant_bubble = self.append_assistant_bubble_to_stack(chunk)
 
         chat_assistant_bubble.append_markdown(chunk)
-        chat_assistant_bubble.start_render()
 
     def finish_assistant_stream(self):
         last_bubble = self.peek_most_recent()
         if isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.ASSISTANT:
-            last_bubble.stop_rendering()
             return last_bubble.get_markdown()
         else:
             print("Holy fuck. Tried to close down assistant stream and last bubble is not the assistant bubble.")
@@ -895,6 +907,9 @@ class ChatWindow(QMainWindow):
 
     def set_busy(self, busy: bool) -> None:
          self.input_bar.set_busy(busy)
+
+    def is_busy(self):
+        return self.input_bar.busy_state
 
     def set_theme(self, theme: Theme) -> None:
         """Public API to switch theme at runtime."""
