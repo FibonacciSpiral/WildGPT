@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from PyQt5.QtCore import QTimer, QSize, Qt
 from PyQt5.QtGui import QTextOption
 from PyQt5.QtWidgets import (
@@ -26,7 +28,6 @@ class MinimumSizeBrowser(QTextBrowser):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         # simple cache for heightForWidth
 
-       # self.setMinimumWidth(500) # gotta set it to something to start
         self.current_w = 1
         self.current_h = 1
 
@@ -47,9 +48,14 @@ class MinimumSizeBrowser(QTextBrowser):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
 
         self.document().setDocumentMargin(0)
+        self.textChanged.connect(self.recompute_dimensions)
+
+        self.lock = threading.Lock()
+
 
     def sizeHint(self) -> QSize:  # type: ignore[override]
-        return QSize(self.current_w, self.current_h)
+        with self.lock:  # acquire, and auto-release even if exception occurs
+            return QSize(self.current_w, self.current_h)
 
     def minimumSizeHint(self) -> QSize:  # type: ignore[override]
         return self.sizeHint()
@@ -83,7 +89,7 @@ class MinimumSizeBrowser(QTextBrowser):
 
         w = int(min(ideal_content_w + extra_w, self.maximumWidth()))
 
-        if w >= self.maximumWidth():
+        if w > self.maximumWidth():
             w = self.maximumWidth()
 
         if w < self.minimumWidth():
@@ -129,8 +135,15 @@ class MinimumSizeBrowser(QTextBrowser):
         return total_h
 
     def recompute_dimensions(self):
-        if self.check_if_size_changed():
-            self.updateGeometry()
+        self.lock.acquire()
+        update = False
+        try:
+            update = self.check_if_size_changed()
+        finally:
+            self.lock.release()
+            if update:
+                self.updateGeometry()
+                self.parent().updateGeometry()  # this should not be fucking necessary
 
 
     # --- utilities ------------------------------------------------------
@@ -171,7 +184,7 @@ class MessageBubble(MinimumSizeBrowser):
 
     def _on_scroll(self):
         sb = self.verticalScrollBar()
-        self.autoscroll = (sb.value() == sb.maximum())
+        self.autoscroll = (sb.value() > (sb.maximum() - 15))  # gives some cushion
 
 class InputChatBubble(MinimumSizeBrowser):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -181,5 +194,4 @@ class InputChatBubble(MinimumSizeBrowser):
         self.setAcceptRichText(False)
         self.textChanged.connect(lambda: QTimer.singleShot(0, self.ensureCursorVisible))
         self.setFocusPolicy(Qt.StrongFocus)
-        self.textChanged.connect(self.recompute_dimensions)
         QTimer.singleShot(0, self.recompute_dimensions)

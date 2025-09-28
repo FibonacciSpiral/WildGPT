@@ -100,3 +100,10 @@ class TopBar(QWidget):
         w = max(b.sizeHint().width() for b in btns)
         for b in btns:
             b.setFixedWidth(w + 100)
+
+    def set_busy(self, busy):
+        self.new_chat_btn.setEnabled(not busy)
+        self.pick_persona_btn.setEnabled(not busy)
+        self.create_persona_btn.setEnabled(not busy)
+        self.model_combo.setEnabled(not busy)
+        self.temp_spin.setEnabled(not busy)

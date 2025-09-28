@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import pyqtSignal, Qt
+from pathlib import Path
+
+from PyQt5.QtCore import pyqtSignal, Qt, QStandardPaths, QSize, QUrl
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
-    QWidget, QHBoxLayout, QVBoxLayout, QSizePolicy
+    QWidget, QHBoxLayout, QVBoxLayout, QSizePolicy, QMessageBox, QFileDialog, QDialog, QLabel, QToolButton
 )
 
 from src.input_bar import ChatInputBar
@@ -74,7 +76,6 @@ class ChatWindow(QMainWindow):
         self.top_bar.settingsChanged.connect(self.settingsChanged)
         self.settingsChanged.connect(self.update_settings)
         self.top_bar.newChatRequested.connect(self.newChatRequested)
-        self.newChatRequested.connect(self.new_chat_requested)
 
     # -------- Public slots --------
     def add_user_message(self, text: str) -> None:
@@ -90,7 +91,8 @@ class ChatWindow(QMainWindow):
         return self.chat_stack.finish_assistant_stream()
 
     def set_busy(self, busy: bool) -> None:
-         self.input_bar.set_busy(busy)
+        self.input_bar.set_busy(busy)
+        self.top_bar.set_busy(busy)
 
     def is_busy(self):
         return self.input_bar.busy_state
@@ -116,5 +118,65 @@ class ChatWindow(QMainWindow):
         super().resizeEvent(event)
         self.input_bar.update_boundaries(self.width(), self.height())
 
-    def new_chat_requested(self):
-        pass
+    def ask_save_before_new(self) -> int:
+        """Ask user if they want to save before starting a new chat."""
+        response =  QMessageBox.question(
+            self,
+            "Save Chat?",
+            "Do you want to save the current chat before starting a new one?",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+        )
+
+        if response == QMessageBox.Yes:
+            return True
+        elif response == QMessageBox.No:
+            return False
+        else:
+            return None
+
+    def choose_save_location(self, default_dir="./", name="3====>---") -> str:
+        """Open a Save dialog defaulting to a JSON filename and return the chosen path ('' if canceled)."""
+        dlg = QFileDialog(self, "Save File")
+        dlg.setAcceptMode(QFileDialog.AcceptSave)  # Save instead of Open
+        dlg.setNameFilters(["JSON Files (*.json)", "All Files (*)"])
+
+        # Use Qt's dialog (not native) so we can show min/max (collapse/expand) buttons
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        dlg.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        dlg.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+
+        parent_width = self.width()
+
+        min_w = int(parent_width * 0.7)
+        min_h  = int(0.5 * parent_width)
+
+        dlg.setMinimumSize(QSize(min_w, min_h))
+
+        home = Path.home()
+
+        # Sidebar entries
+        sidebar_urls = [
+            QUrl.fromLocalFile("C:/"),  # C drive
+            QUrl.fromLocalFile(str(home / "Downloads")),
+            QUrl.fromLocalFile(str(home / "Documents")),
+            QUrl.fromLocalFile(str(home / "Desktop")),
+            QUrl.fromLocalFile(str(home / "OneDrive"))
+        ]
+
+        dlg.setSidebarUrls(sidebar_urls)
+
+        # Default starting folder + suggested filename
+        dlg.setDirectory(str(default_dir))
+        dlg.selectFile(f"{name}.json")
+
+        if dlg.exec() == QDialog.Accepted:
+            path = dlg.selectedFiles()[0]
+            if not path.lower().endswith(".json"):
+                path += ".json"
+            return path
+        return ""
+
+    def show_error(self, title: str, message: str):
+        """Display an error message box."""
+        QMessageBox.critical(self, title, message)
+

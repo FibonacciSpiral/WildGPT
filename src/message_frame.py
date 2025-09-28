@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QTimer, QEvent, pyqtSignal, Qt
+from PyQt5.QtCore import QTimer, QEvent, pyqtSignal, Qt, QSize
 from PyQt5.QtGui import QColor, QGuiApplication, QTextCursor, QTextDocument, \
     QPainter
 from PyQt5.QtWidgets import (
@@ -69,6 +69,7 @@ class TypingIndicator(QWidget):
             self.current_frame = 0
 
 class MessageFrame(QFrame):
+    size_changed = pyqtSignal(QSize)
     def __init__(self, role: str, parent: QWidget = None):
         super().__init__(parent)
         self.role = role
@@ -83,6 +84,10 @@ class ProgressIndicator(MessageFrame):
         msg_frame_hbox.addWidget(TypingIndicator(self))
         msg_frame_hbox.addWidget(HSpacer(self))
 
+    def update_boundaries(self, parent_w):
+        pass
+
+
 class ChatMessageFrame(MessageFrame):
     """
     Stream-optimized message bubble.
@@ -93,28 +98,28 @@ class ChatMessageFrame(MessageFrame):
         super().__init__(role, parent)
         self._md_buffer = md_buffer
         self._build_ui()
-        self._bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         # setup the copy button stuff (may move this to a helper later)
         self._copy_button.setText("Copy")
         self._copy_button.setVisible(False)
-        self._copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self._md_buffer))
+        self._copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self._md_buffer.lstrip()))
 
         self._bubble.installEventFilter(self)
         self.setMouseTracking(True)
 
         self._pending = False
-        self._update_boundaries()
-        QTimer.singleShot(10, lambda: self.set_markdown(md_buffer))
+        self.set_markdown(md_buffer)
 
 
     def _build_ui(self):
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         msg_frame_hbox = QHBoxLayout(self)  # layout self horizontally
         msg_frame_hbox.setContentsMargins(20, 20, 20, 20)
         msg_frame_hbox.setSpacing(20)
 
         # organizational widget to contain the components of a chat message bubble
         bubble = QWidget(self)
+        bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
 
         # vertically layout the bubble
         bubble_vbox = QVBoxLayout(bubble)
@@ -159,50 +164,46 @@ class ChatMessageFrame(MessageFrame):
 
     def append_markdown(self, chunk: str) -> None:
         self._md_buffer += chunk
-        current_val = self._browser.verticalScrollBar().value()
+        scrollbar_val = self._browser.verticalScrollBar().value()
         doc = QTextDocument()
         doc.setHtml(md.render(self._md_buffer))  # parse off-screen
         self._browser.setDocument(doc)  # cheap swap
-        self.update_all_geometry()
-        if self._browser.autoscroll is True:
-            c = self._browser.textCursor()
-            c.movePosition(QTextCursor.End)
-            self._browser.setTextCursor(c)
-            self._browser.ensureCursorVisible()
-        else:
-            self._browser.verticalScrollBar().setValue(current_val)
+        QTimer.singleShot(0, lambda: self.set_view(scrollbar_val))
 
     def get_markdown(self) -> str:
         return self._md_buffer
 
     def set_markdown(self, text) -> None:
         self._md_buffer = text
+        scrollbar_val = self._browser.verticalScrollBar().value()
         doc = QTextDocument()
         doc.setHtml(md.render(text))  # parse off-screen
-
         self._browser.setDocument(doc)  # cheap swap
+        QTimer.singleShot(0, lambda: self.set_view(scrollbar_val))
 
-        self.update_all_geometry()
+    def set_view(self, scrollbar_current_val):
+        if self._browser.autoscroll is True:
+            c = self._browser.textCursor()
+            c.movePosition(QTextCursor.End)
+            self._browser.setTextCursor(c)
+            self._browser.ensureCursorVisible()
+        else:
+            self._browser.verticalScrollBar().setValue(scrollbar_current_val)
+        self.size_changed.emit(self.sizeHint())
 
-    def update_all_geometry(self):
-        self._browser.recompute_dimensions()
-        self._bubble.updateGeometry()
-        self.updateGeometry()
-
-    def _update_boundaries(self):                                                 #        ▲
-        if self.parentWidget():                                                  # ▲      ▲
-            w = int(self.parentWidget().width() * 0.75)                          # ▲ ▲   ▲ ▲
+    def update_boundaries(self, parent_w):                                                 #        ▲
+        if parent_w:                                                  # ▲      ▲
+            w = int(parent_w * 0.35)                          # ▲ ▲   ▲ ▲
             h = int(float(w) * 0.618)                   # Follow the ratio       # ▲▲ ▲ ▲ ▲ ▲ ▲▲
+            print(f"updating boundaries: w:{w}x h:{h}")
             self._browser.setMaximumWidth(w)
             self._browser.setMaximumHeight(h)
+            self._browser.recompute_dimensions()  # boundaries just shifted so lets recompute
 
     def _preprocess_think_blocks(self, text: str) -> str:
         return text.replace("<think>", "&lt;think&gt;").replace("</think>", "&lt;/think&gt;")
 
     # --- overrides -----------------------------------------------------
-    def resizeEvent(self, event):
-        self._update_boundaries()
-        super().resizeEvent(event)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Enter:

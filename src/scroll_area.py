@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5.QtWidgets import (
-    QScrollArea,
-    QWidget, QFrame, QVBoxLayout, QSizePolicy
+    QWidget, QSizePolicy, QListWidget, QListWidgetItem, QListView, QAbstractScrollArea
 )
 
 from src.message_frame import ChatMessageFrame, MessageFrame, ProgressIndicator
+
 
 # ---- Light-weight role identifiers ----
 @dataclass(frozen=True)
@@ -20,42 +20,30 @@ class ChatRole:
 
 
 # ---- Scroll area to hold messages ----
-class ChatScrollArea(QScrollArea):
+class ChatScrollArea(QListWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.NoFrame)
+        # Style & sizing
         self.setObjectName("chatScroll")
-        # Important: let the viewport paint the stylesheet background
-        self.viewport().setAttribute(Qt.WA_StyledBackground, True)
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setUniformItemSizes(False)  # allow variable bubble heights
+        self.setWordWrap(True)
+        self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self.verticalScrollBar().setSingleStep(20)  # pixels per wheel tick
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self._container = QWidget()
-        self._container.setObjectName("chatContent")
-        # important: container should not claim to expand vertically
-        self._container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        self.setResizeMode(QListView.Adjust)
+        self.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self.setSelectionMode(QListWidget.NoSelection)
+        self.setFocusPolicy(Qt.NoFocus)
 
-        self._chat_stack_layout = QVBoxLayout(self._container)
-        self._chat_stack_layout.setContentsMargins(8, 8, 8, 8)
-        self._chat_stack_layout.setSpacing(0)
-        self._chat_stack_layout.addStretch(1)
-
-        self.setWidget(self._container)
-
-        # If this is a plain QWidget container, ensure the style engine paints its bg:
-        self.setAttribute(Qt.WA_StyledBackground, True)
 
     def _append_bubble_to_stack(self, bubble: MessageFrame) -> None:
-        """
-        Simply inserts a bubble at the bottom of the chat stack
-        :param bubble:
-        :return:
-        """
-        self.insert_bubble_at_idx(bubble, self._chat_stack_layout.count() - 1)
+        # append after the last item
+        self.insert_bubble_at_idx(bubble, self.count())
 
     def append_assistant_bubble_to_stack(self, text="") -> ChatMessageFrame:
-        bubble = ChatMessageFrame(ChatRole.ASSISTANT, text)
+        bubble = ChatMessageFrame(role=ChatRole.ASSISTANT, md_buffer=text)
         self._append_bubble_to_stack(bubble)  #make sure the assistant is able to append html
         return bubble
 
@@ -70,21 +58,41 @@ class ChatScrollArea(QScrollArea):
         return indicator    # probably does not need to return the indicator...
 
     def remove_most_recent(self) -> bool:
-        return self.remove_bubble_at_idx(self._chat_stack_layout.count() - 2)
+        """
+        Removes the most recently added bubble, if any.
+        """
+        if self.count() == 0:
+            return False
+        return self.remove_bubble_at_idx(self.count() - 1)
 
-    def insert_bubble_at_idx(self, bubble: MessageFrame, idx: int) -> None:
+    def _update_item_size(self, item: QListWidgetItem, size: QSize):
+        # we set the size of the row. Only the height actually matters
+        item.setSizeHint(QSize(item.sizeHint().width(), size.height()))
+        self.doItemsLayout()
+
+    def insert_bubble_at_idx(self, frame: MessageFrame, idx: int) -> None:
         """
         Inserts a bubble wherever you want, provided the idx is valid
-        :param bubble:
+        :param frame:
         :param idx:
         :return:
         """
-        bottom_of_stack = self._chat_stack_layout.count() - 1
-        if idx > bottom_of_stack or idx < 0:
+        if idx < 0 or idx > self.count():
             print("wtf you doin bro? you cannot insert a bubble into oblivion")
             return None
-        self._chat_stack_layout.insertWidget(idx, bubble)
-        QTimer.singleShot(50, self.scroll_to_bottom)
+        frame.update_boundaries(self.width())  # todo update boundaries of the bubbles in the event the app is resized
+
+        item = QListWidgetItem()
+
+        item.setSizeHint(QSize(self.width(), frame.height()))  # let row height match widget
+
+        self.insertItem(idx, item)
+        self.setItemWidget(item, frame)
+
+        # Auto-update on resize
+        frame.size_changed.connect(lambda size, i=item: self._update_item_size(i, size))
+
+        QTimer.singleShot(50, self.scrollToBottom)
 
     def remove_bubble_at_idx(self, idx: int) -> bool:
         """
@@ -92,32 +100,39 @@ class ChatScrollArea(QScrollArea):
         :param idx:
         :return:
         """
-        success = False
-        bottom_of_stack = self._chat_stack_layout.count() - 1
-        if idx > bottom_of_stack or idx < 0:
+        if idx < 0 or idx >= self.count():
             print("wtf you doin bro? you cannot remove a non existent bubble")
             return False
 
-        bubble = self._chat_stack_layout.itemAt(idx).widget()
+        item = self.item(idx)
+        bubble = self.itemWidget(item)
         if bubble is not None:
-            self._chat_stack_layout.removeWidget(bubble)
-            bubble.setParent(None)
-            bubble.deleteLater()
-            success = True
+            self.removeItemWidget(item)  # detach widget from the item
+            bubble.setParent(None)  # orphan it
+            bubble.deleteLater()  # schedule deletion
+        self.takeItem(idx)  # remove the QListWidgetItem itself
 
-        QTimer.singleShot(50, self.scroll_to_bottom)
-        return success
+        QTimer.singleShot(50, self.scrollToBottom)
+        return True
 
     def peek_most_recent(self) -> MessageFrame | None:
-        idx = self._chat_stack_layout.count() - 2
-        return self.get_frame_at_idx(idx)
+        """
+        Returns the most recently added bubble, or None if empty.
+        """
+        if self.count() == 0:
+            return None
+        return self.get_frame_at_idx(self.count() - 1)
 
-    def get_frame_at_idx(self, idx) -> MessageFrame | None:
-        if idx >= 0:
-            w = self._chat_stack_layout.itemAt(idx).widget()
-        else:
-            w = None
-        return w
+    def get_frame_at_idx(self, idx: int) -> MessageFrame | None:
+        """
+        Returns the bubble widget at the given index, or None if invalid.
+        """
+        if idx < 0 or idx >= self.count():
+            return None
+
+        item = self.item(idx)
+        return self.itemWidget(item)
+
 
     def append_to_assistant(self, chunk) -> None:
         last_bubble = self.peek_most_recent()
@@ -130,7 +145,7 @@ class ChatScrollArea(QScrollArea):
             if success:
                 self.append_to_assistant(chunk)
             else:
-                print("Failed to system bubble!")
+                print("Failed to remove system bubble!")
         elif isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.USER:
             self.append_assistant_bubble_to_stack(chunk)
         else:
@@ -145,13 +160,11 @@ class ChatScrollArea(QScrollArea):
             return None
 
     def clear_messages(self) -> None:
-        for i in reversed(range(self._chat_stack_layout.count() - 1)):
-            item = self._chat_stack_layout.itemAt(i)
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-        QTimer.singleShot(0, self.scroll_to_bottom)
+        """
+        Removes all bubbles from the chat list.
+        """
+        self.clear()  # removes all QListWidgetItems (and their widgets)
+        QTimer.singleShot(0, self.scrollToBottom)
 
     def scroll_to_bottom(self) -> None:
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        self.scrollToBottom()

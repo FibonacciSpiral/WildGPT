@@ -191,7 +191,7 @@ class ThemeManager:
             background: {theme.user_bubble_bg};
             color: {theme.text};
             border-radius: 30px;
-            border: 3px solid {theme.border};
+            border: 1px solid {theme.border};
         }}
         /* Assistant bubble: ChatGPT style */
         #ai_bubble[variant="assistant"] {{
@@ -213,13 +213,42 @@ class ThemeManager:
             border-top: 2px solid rgba(255, 255, 255, 0.2);
             padding: 8px;
         }}
-
-        QTextBrowser QScrollBar:vertical {{
+        
+        #chatScroll QScrollBar:vertical {{
+            border: none;
+            background: #2e2e2e;   /* scrollbar track */
+            margin: 12px 0px 12px 0px;  /* top right bottom left */
+        }}
+        
+        #chatScroll QScrollBar::handle:vertical {{
+            background: #5c5c5c;   /* handle (thumb) */
+            min-height: 20px;
+            border-radius: 6px;
+        }}
+        
+        #chatScroll QScrollBar::handle:vertical:hover {{
+            background: #808080;   /* hover color */
+        }}
+        
+        #chatScroll QScrollBar::sub-line:vertical {{
+            height: 12px;                 /* reserve space at top */
+            background: #5c5c5c;       /* no visible button */
+            subcontrol-origin: margin;
+            subcontrol-position: top;
+        }}
+        
+        #chatScroll QScrollBar::add-line:vertical {{
+            height: 12px;                 /* reserve space at bottom */
+            background: #5c5c5c;
+            subcontrol-origin: margin;
+            subcontrol-position: bottom;
+        }}
+        #ai_bubble QScrollBar:vertical {{
             width: 0px;
             margin: 0;
             background: transparent;
         }}
-        QTextBrowser QScrollBar:horizontal {{
+        #ai_bubble QScrollBar:horizontal {{
             height: 0px;
             margin: 0;
             background: transparent;
@@ -229,8 +258,6 @@ class ThemeManager:
         border-image: url("./Dependencies/bg.jpg") 0 0 0 0 stretch stretch; 
         }}
 
-        QWidget#chatContent {{ background: Transparent; }}
-        QWidget#chatScroll {{ background: Transparent; }}
-
+        QWidget#chatScroll {{ background: Transparent; }}       
 
         """
