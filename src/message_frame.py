@@ -102,11 +102,8 @@ class ChatMessageFrame(MessageFrame):
         self._copy_button.setText("Copy")
         self._copy_button.setVisible(False)
         self._copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self._md_buffer.lstrip()))
-
         self._bubble.installEventFilter(self)
         self.setMouseTracking(True)
-
-        self._pending = False
         self.set_markdown(md_buffer)
 
 
@@ -191,10 +188,11 @@ class ChatMessageFrame(MessageFrame):
             self._browser.verticalScrollBar().setValue(scrollbar_current_val)
         self.size_changed.emit(self.sizeHint())
 
-    def update_boundaries(self, parent_w):                                                 #        ▲
-        if parent_w:                                                  # ▲      ▲
-            w = int(parent_w * 0.35)                          # ▲ ▲   ▲ ▲
-            h = int(float(w) * 0.618)                   # Follow the ratio       # ▲▲ ▲ ▲ ▲ ▲ ▲▲
+    def update_boundaries(self, parent_w):
+        print("updating boundaries")
+        if parent_w:
+            w = int(parent_w * 0.35)
+            h = int(float(w) * 0.618)                   # Follow the ratio
             print(f"updating boundaries: w:{w}x h:{h}")
             self._browser.setMaximumWidth(w)
             self._browser.setMaximumHeight(h)

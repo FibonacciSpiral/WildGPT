@@ -143,7 +143,7 @@ class MinimumSizeBrowser(QTextBrowser):
             self.lock.release()
             if update:
                 self.updateGeometry()
-                self.parent().updateGeometry()  # this should not be fucking necessary
+              #  self.parent().updateGeometry()  # this should not be fucking necessary
 
 
     # --- utilities ------------------------------------------------------
@@ -184,7 +184,7 @@ class MessageBubble(MinimumSizeBrowser):
 
     def _on_scroll(self):
         sb = self.verticalScrollBar()
-        self.autoscroll = (sb.value() > (sb.maximum() - 15))  # gives some cushion
+        self.autoscroll = (sb.value() > (sb.maximum() - 5))  # gives some cushion
 
 class InputChatBubble(MinimumSizeBrowser):
     def __init__(self, parent: QWidget | None = None) -> None:

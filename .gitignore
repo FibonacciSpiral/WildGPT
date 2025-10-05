@@ -38,6 +38,9 @@ pip-delete-this-directory.txt
 
 # Unit test / coverage reports
 htmlcov/
+ 
+# Exclude Copilot instructions
+.github/copilot-instructions.md
 .tox/
 .nox/
 .coverage

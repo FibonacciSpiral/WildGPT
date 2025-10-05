@@ -7,6 +7,7 @@ from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5.QtWidgets import (
     QWidget, QSizePolicy, QListWidget, QListWidgetItem, QListView, QAbstractScrollArea
 )
+from PyQt5.QtGui import QResizeEvent
 
 from src.message_frame import ChatMessageFrame, MessageFrame, ProgressIndicator
 
@@ -80,18 +81,14 @@ class ChatScrollArea(QListWidget):
         if idx < 0 or idx > self.count():
             print("wtf you doin bro? you cannot insert a bubble into oblivion")
             return None
-        frame.update_boundaries(self.width())  # todo update boundaries of the bubbles in the event the app is resized
-
+        frame.update_boundaries(self.width())
         item = QListWidgetItem()
-
         item.setSizeHint(QSize(self.width(), frame.height()))  # let row height match widget
-
         self.insertItem(idx, item)
         self.setItemWidget(item, frame)
 
         # Auto-update on resize
         frame.size_changed.connect(lambda size, i=item: self._update_item_size(i, size))
-
         QTimer.singleShot(50, self.scrollToBottom)
 
     def remove_bubble_at_idx(self, idx: int) -> bool:
@@ -101,7 +98,7 @@ class ChatScrollArea(QListWidget):
         :return:
         """
         if idx < 0 or idx >= self.count():
-            print("wtf you doin bro? you cannot remove a non existent bubble")
+            print("wtf you doin bro? you cannot remove a non-existent bubble")
             return False
 
         item = self.item(idx)
@@ -115,7 +112,7 @@ class ChatScrollArea(QListWidget):
         QTimer.singleShot(50, self.scrollToBottom)
         return True
 
-    def peek_most_recent(self) -> MessageFrame | None:
+    def peek_most_recent(self) -> Optional[MessageFrame]:
         """
         Returns the most recently added bubble, or None if empty.
         """
@@ -123,7 +120,7 @@ class ChatScrollArea(QListWidget):
             return None
         return self.get_frame_at_idx(self.count() - 1)
 
-    def get_frame_at_idx(self, idx: int) -> MessageFrame | None:
+    def get_frame_at_idx(self, idx: int) -> Optional[MessageFrame]:
         """
         Returns the bubble widget at the given index, or None if invalid.
         """
@@ -134,22 +131,38 @@ class ChatScrollArea(QListWidget):
         return self.itemWidget(item)
 
 
-    def append_to_assistant(self, chunk) -> None:
+    def append_to_assistant(self, chunk: str) -> None:
+        """
+        Appends a chunk of markdown content to the current assistant message.
+        If a progress indicator is the last item, it is removed.
+        If the last message is from the user or nothing is there, a new assistant bubble is appended.
+        """
         last_bubble = self.peek_most_recent()
 
-        if isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.ASSISTANT:
-            chat_assistant_bubble = last_bubble
-            chat_assistant_bubble.append_markdown(chunk)
-        elif isinstance(last_bubble, MessageFrame) and last_bubble.role == ChatRole.SYSTEM:
-            success = self.remove_most_recent()  # get rid of system bubble which is likely a progress indicator
-            if success:
-                self.append_to_assistant(chunk)
+        if isinstance(last_bubble, ChatMessageFrame):
+            if last_bubble.role == ChatRole.ASSISTANT:
+                # Append to existing assistant message
+                last_bubble.append_markdown(chunk)
+                return
+            elif last_bubble.role == ChatRole.USER:
+                # Start a new assistant message in reply to user
+                self.append_assistant_bubble_to_stack(chunk)
+                return
+
+        elif isinstance(last_bubble, ProgressIndicator):
+            # Remove the loading indicator before continuing
+            removed = self.remove_most_recent()
+            if not removed:
+                print("Could not remove progress indicator before appending assistant message.")
             else:
-                print("Failed to remove system bubble!")
-        elif isinstance(last_bubble, ChatMessageFrame) and last_bubble.role == ChatRole.USER:
-            self.append_assistant_bubble_to_stack(chunk)
-        else:
-            print("hmmm if this happens, well you broke the code buddy. FIX IT")
+                # After removing, re-check the new last bubble
+                return self.append_to_assistant(chunk)
+            
+        # currently no handling for other types of bubbles
+
+        # todo make sure every bubble has its own name
+        print("Oh my God what did you do? -> in append_to_assistant: last_bubble=%s", type(last_bubble).__name__)
+
 
     def finish_assistant_stream(self):
         last_bubble = self.peek_most_recent()
@@ -168,3 +181,12 @@ class ChatScrollArea(QListWidget):
 
     def scroll_to_bottom(self) -> None:
         self.scrollToBottom()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        for i in range(self.count()):
+            frame = self.get_frame_at_idx(i)
+            if frame:
+                frame.update_boundaries(self.width())
+                item = self.item(i)
+                item.setSizeHint(QSize(self.width(), frame.height()))

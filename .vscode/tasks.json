@@ -1,0 +1,17 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "clear-terminal",
+            "type": "shell",
+            "command": "${command:workbench.action.terminal.clear}",
+            "presentation": {
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "clear": true,
+                "showReuseMessage": false
+            }
+        }
+    ]
+}
