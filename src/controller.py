@@ -41,11 +41,19 @@ class Controller(QWidget):
         self.view = ChatWindow()
         self._messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+        base_dir = Path.home() / "Documents"  # or wherever you want
+        mychats_dir = base_dir / "My Chats"
+        mychats_dir.mkdir(parents=True, exist_ok=True)
+
+        self.mychats_dir = str(mychats_dir)
+
         # connections
         self.view.sendMessage.connect(self.on_send)
         self.view.stopRequested.connect(self.on_stop)
         self.view.clearRequested.connect(self.on_clear)
-        self.view.newChatRequested.connect(self.new_chat_requested)
+        self.view.saveChatRequested.connect(self.save_chat_requested)
+        self.view.loadChatRequested.connect(self.load_chat)
+        self.view.pickPersonalityRequested.connect(self.pick_personality)
 
         # streaming members
         self._thread: Optional[QThread] = None
@@ -67,10 +75,72 @@ class Controller(QWidget):
     def on_stop(self) -> None:
         self._cleanup_stream()
 
+    # todo add a confirmation dialog if there's unsaved chat
+
     def on_clear(self) -> None:
         self.on_stop()
         self._messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.view.on_clear_clicked()
+
+    def save_chat_requested(self):
+        """ 
+        Handles the logic when the user requests to save the current chat.
+        If there is chat history, prompts the user to save it before clearing.
+        """
+        if len(self._messages) > 1:  # has history
+
+            location = self.view.choose_save_location(default_dir=self.mychats_dir)
+            if location:
+                if self.save_chat(location):
+                    self.on_clear()               # reset chat history only if save was successful
+            else:
+                return  # bail
+        else:
+            self.view.show_error("Why are you trying to save a chat when there isn't one??? :o Are you alright...")
+
+    def save_chat(self, location: str) -> bool:
+        """Write messages to a JSON file at the given path."""
+        success = True
+        try:
+            with open(location, "w", encoding="utf-8") as f:
+                json.dump(self._messages, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.view.show_error("Save Error", f"Failed to save chat:\n{e}")
+            success = False
+        return success
+
+    def load_chat(self):
+        """Load chat history from a JSON file."""
+        if self.view.is_busy():
+            return
+        location = self.view.choose_open_location(default_dir=self.mychats_dir)
+        if not location:
+            return  # user canceled
+
+        try:
+            with open(location, "r", encoding="utf-8") as f:
+                loaded_messages = json.load(f)
+            if not isinstance(loaded_messages, list) or not all(
+                isinstance(msg, dict) and "role" in msg and "content" in msg for msg in loaded_messages
+            ):
+                raise ValueError("Invalid chat format")
+
+            self.on_clear()  # clear current chat
+            self._messages = loaded_messages
+            for msg in loaded_messages:
+                if msg["role"] == "user":
+                    self.view.add_user_message(msg["content"])
+                elif msg["role"] == "assistant":
+                    self.view.add_assistant_message(msg["content"])
+            # No need to add system messages to the UI
+
+        except Exception as e:
+            self.view.show_error("Load Error", f"Failed to load chat:\n{e}")
+
+    def pick_personality(self):
+        """Placeholder for personality picking logic."""
+        self.view.show_error("Not Implemented", "Personality picking is not implemented yet.")
+        # Future implementation could involve loading different system prompts or settings
 
     def _start_stream(self) -> None:
         """
@@ -143,38 +213,7 @@ class Controller(QWidget):
         # self.view.append_assistant_stream(f"\r\nA streaming error occurred! \r\n "
         #                              f"Exception type: {exc_type}, Exception Value: {exc_value}, traceback: {exc_tb}")
         #todo potentially add an assistant bubble with this streaming error
-
-
-    def new_chat_requested(self):
-        """Handle starting a new chat, asking to save if needed."""
-        if len(self._messages) > 1:  # has history
-            user_choice = self.view.ask_save_before_new()
-
-            if user_choice is True:
-                base_dir = Path.home() / "Documents"  # or wherever you want
-                mychats_dir = base_dir / "My Chats"
-                mychats_dir.mkdir(parents=True, exist_ok=True)
-                location = self.view.choose_save_location(default_dir=mychats_dir)
-                if location:
-                    self.save_chat(location)
-                else:
-                    return  # bail
-            elif user_choice is None:  # user canceled
-                return  # bail out, keep current chat
-
-            # reset chat history
-            self.on_clear()
-        else:
-            self.view.show_error("New Chat Request Failed", "No chat history to save!")
-
-    def save_chat(self, location: str):
-        """Write messages to a JSON file at the given path."""
-        try:
-            with open(location, "w", encoding="utf-8") as f:
-                json.dump(self._messages, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            self.view.show_error("Save Error", f"Failed to save chat:\n{e}")
-
+    
 
 
 

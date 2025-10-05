@@ -14,7 +14,8 @@ from PyQt5.QtWidgets import (
 class TopBar(QWidget):
     modelChanged = pyqtSignal(str)
     settingsChanged = pyqtSignal(dict)
-    newChatRequested = pyqtSignal()
+    saveChatRequested = pyqtSignal()
+    loadChatRequested = pyqtSignal()
     pickPersonalityRequested = pyqtSignal()
     createPersonalityRequested = pyqtSignal()
 
@@ -64,7 +65,8 @@ class TopBar(QWidget):
         self.temp_spin.setMinimumWidth(140)
 
         # Action buttons
-        self.new_chat_btn = QPushButton("New Chat", self)
+        self.save_chat_btn = QPushButton("Save Chat", self)
+        self.load_chat_btn = QPushButton("Load Chat", self)
         self.pick_persona_btn = QPushButton("Pick Personality", self)
         self.create_persona_btn = QPushButton("Create Personality", self)
 
@@ -74,9 +76,10 @@ class TopBar(QWidget):
         layout.addWidget(QLabel("Temperature:"), 0, 2)
         layout.addWidget(self.temp_spin, 0, 3)
         layout.addItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum), 0, 4)
-        layout.addWidget(self.new_chat_btn, 0, 5)
-        layout.addWidget(self.pick_persona_btn, 0, 6)
-        layout.addWidget(self.create_persona_btn, 0, 7)
+        layout.addWidget(self.save_chat_btn, 0, 5)
+        layout.addWidget(self.load_chat_btn, 0, 6)
+        layout.addWidget(self.pick_persona_btn, 0, 7)
+        layout.addWidget(self.create_persona_btn, 0, 8)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(4, 1)
         self._equalize_topbar_buttons()
@@ -84,7 +87,8 @@ class TopBar(QWidget):
         # Signals
         self.model_combo.currentTextChanged.connect(self.modelChanged.emit)
         self.temp_spin.valueChanged.connect(lambda _=None: self._emit_settings())
-        self.new_chat_btn.clicked.connect(self.newChatRequested)
+        self.save_chat_btn.clicked.connect(self.saveChatRequested)
+        self.load_chat_btn.clicked.connect(self.loadChatRequested)
         self.pick_persona_btn.clicked.connect(self.pickPersonalityRequested)
         self.create_persona_btn.clicked.connect(self.createPersonalityRequested)
 
@@ -92,7 +96,7 @@ class TopBar(QWidget):
         self.settingsChanged.emit({"temperature": float(self.temp_spin.value())})
 
     def _equalize_topbar_buttons(self) -> None:
-        btns = [self.new_chat_btn, self.pick_persona_btn, self.create_persona_btn]
+        btns = [self.save_chat_btn, self.load_chat_btn, self.pick_persona_btn, self.create_persona_btn]
         # Fix horizontal size so layout won't stretch them unevenly
         for b in btns:
             b.setSizePolicy(QSizePolicy.Fixed, b.sizePolicy().verticalPolicy())
@@ -102,7 +106,8 @@ class TopBar(QWidget):
             b.setFixedWidth(w + 100)
 
     def set_busy(self, busy):
-        self.new_chat_btn.setEnabled(not busy)
+        self.save_chat_btn.setEnabled(not busy)
+        self.load_chat_btn.setEnabled(not busy)
         self.pick_persona_btn.setEnabled(not busy)
         self.create_persona_btn.setEnabled(not busy)
         self.model_combo.setEnabled(not busy)

@@ -24,7 +24,8 @@ class ChatWindow(QMainWindow):
     clearRequested = pyqtSignal()
     modelChanged = pyqtSignal(str)
     settingsChanged = pyqtSignal(dict)
-    newChatRequested = pyqtSignal()
+    saveChatRequested = pyqtSignal()
+    loadChatRequested = pyqtSignal()
     pickPersonalityRequested = pyqtSignal()
     createPersonalityRequested = pyqtSignal()
 
@@ -75,11 +76,16 @@ class ChatWindow(QMainWindow):
         self.top_bar.modelChanged.connect(self.update_model)
         self.top_bar.settingsChanged.connect(self.settingsChanged)
         self.settingsChanged.connect(self.update_settings)
-        self.top_bar.newChatRequested.connect(self.newChatRequested)
+        self.top_bar.saveChatRequested.connect(self.saveChatRequested)
+        self.top_bar.loadChatRequested.connect(self.loadChatRequested)
+        self.top_bar.pickPersonalityRequested.connect(self.pickPersonalityRequested)
 
     # -------- Public slots --------
     def add_user_message(self, text: str) -> None:
         self.chat_stack.append_user_bubble_to_stack(text)
+
+    def add_assistant_message(self, text: str) -> None:
+        self.chat_stack.append_assistant_bubble_to_stack(text)
 
     def add_progress_indicator(self)-> None:
         self.chat_stack.append_progress_indicator_to_stack()
@@ -134,7 +140,7 @@ class ChatWindow(QMainWindow):
         else:
             return None
 
-    def choose_save_location(self, default_dir="./", name="3====>---") -> str:
+    def choose_save_location(self, default_dir="./", name="3====O---") -> str:
         """Open a Save dialog defaulting to a JSON filename and return the chosen path ('' if canceled)."""
         dlg = QFileDialog(self, "Save File")
         dlg.setAcceptMode(QFileDialog.AcceptSave)  # Save instead of Open
@@ -173,6 +179,46 @@ class ChatWindow(QMainWindow):
             path = dlg.selectedFiles()[0]
             if not path.lower().endswith(".json"):
                 path += ".json"
+            return path
+        return ""
+    
+    def choose_open_location(self, default_dir="./", name="") -> str:
+        """Open a Open dialog defaulting to a JSON filename and return the chosen path ('' if canceled)."""
+        dlg = QFileDialog(self, "Open File")
+        dlg.setAcceptMode(QFileDialog.AcceptOpen)  # Open instead of Save
+        dlg.setNameFilters(["JSON Files (*.json)", "All Files (*)"])
+
+        # Use Qt's dialog (not native) so we can show min/max (collapse/expand) buttons
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        dlg.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        dlg.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+
+        parent_width = self.width()
+
+        min_w = int(parent_width * 0.7)
+        min_h  = int(0.5 * parent_width)
+
+        dlg.setMinimumSize(QSize(min_w, min_h))
+
+        home = Path.home()
+
+        # Sidebar entries
+        sidebar_urls = [
+            QUrl.fromLocalFile("C:/"),  # C drive
+            QUrl.fromLocalFile(str(home / "Downloads")),
+            QUrl.fromLocalFile(str(home / "Documents")),
+            QUrl.fromLocalFile(str(home / "Desktop")),
+            QUrl.fromLocalFile(str(home / "OneDrive"))
+        ]
+
+        dlg.setSidebarUrls(sidebar_urls)
+
+        # Default starting folder + suggested filename
+        dlg.setDirectory(str(default_dir))
+        dlg.selectFile(f"{name}")
+
+        if dlg.exec() == QDialog.Accepted:
+            path = dlg.selectedFiles()[0]
             return path
         return ""
 
