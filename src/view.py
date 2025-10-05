@@ -79,6 +79,7 @@ class ChatWindow(QMainWindow):
         self.top_bar.saveChatRequested.connect(self.saveChatRequested)
         self.top_bar.loadChatRequested.connect(self.loadChatRequested)
         self.top_bar.pickPersonalityRequested.connect(self.pickPersonalityRequested)
+        self.top_bar.createPersonalityRequested.connect(self.createPersonalityRequested)
 
     # -------- Public slots --------
     def add_user_message(self, text: str) -> None:
