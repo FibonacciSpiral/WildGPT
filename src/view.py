@@ -226,3 +226,7 @@ class ChatWindow(QMainWindow):
         """Display an error message box."""
         QMessageBox.critical(self, title, message)
 
+    def show_info(self, title: str, message: str):
+        """Display an informational message box."""
+        QMessageBox.information(self, title, message)
+

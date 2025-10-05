@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from PyQt5.QtCore import QTimer, QSize, Qt
+from PyQt5.QtCore import QTimer, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QTextOption
 from PyQt5.QtWidgets import (
     QWidget, QTextBrowser, QFrame, QSizePolicy
@@ -21,6 +21,8 @@ def safe_open(url):
 
 
 class MinimumSizeBrowser(QTextBrowser):
+    size_changed = pyqtSignal()  # emitted when the size changes
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setViewportMargins(20, 20, 40, 20)
@@ -50,12 +52,9 @@ class MinimumSizeBrowser(QTextBrowser):
         self.document().setDocumentMargin(0)
         self.textChanged.connect(self.recompute_dimensions)
 
-        self.lock = threading.Lock()
-
 
     def sizeHint(self) -> QSize:  # type: ignore[override]
-        with self.lock:  # acquire, and auto-release even if exception occurs
-            return QSize(self.current_w, self.current_h)
+        return QSize(self.current_w, self.current_h)
 
     def minimumSizeHint(self) -> QSize:  # type: ignore[override]
         return self.sizeHint()
@@ -117,7 +116,7 @@ class MinimumSizeBrowser(QTextBrowser):
         doc = self.document()
         old_tw = doc.textWidth()
         try:
-            doc.setTextWidth(content_w)  #contentw slightly too big
+            doc.setTextWidth(content_w)
             doc_h = math.ceil(doc.size().height())
         finally:
             doc.setTextWidth(old_tw)
@@ -135,15 +134,17 @@ class MinimumSizeBrowser(QTextBrowser):
         return total_h
 
     def recompute_dimensions(self):
-        self.lock.acquire()
         update = False
-        try:
-            update = self.check_if_size_changed()
-        finally:
-            self.lock.release()
-            if update:
-                self.updateGeometry()
-              #  self.parent().updateGeometry()  # this should not be fucking necessary
+        update = self.check_if_size_changed()
+        if update:
+            self.updateGeometry()
+            self.update()
+            parent = self.parent()  # could be None if not in a layout
+            if parent is not None:
+                parent.updateGeometry()
+                parent.update() # force redraw  of parent
+
+            self.size_changed.emit() # tell the parent that we changed size
 
 
     # --- utilities ------------------------------------------------------
@@ -171,7 +172,7 @@ class MinimumSizeBrowser(QTextBrowser):
 
 
 class MessageBubble(MinimumSizeBrowser):
-
+    
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setReadOnly(True)

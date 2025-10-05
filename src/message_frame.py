@@ -92,7 +92,6 @@ class ChatMessageFrame(MessageFrame):
     """
     Stream-optimized message bubble.
     """
-    new_content = pyqtSignal()
 
     def __init__(self, role: str, md_buffer: str="", parent: QWidget = None):
         super().__init__(role, parent)
@@ -104,7 +103,9 @@ class ChatMessageFrame(MessageFrame):
         self._copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self._md_buffer.lstrip()))
         self._bubble.installEventFilter(self)
         self.setMouseTracking(True)
-        self.set_markdown(md_buffer)
+        self._browser.size_changed.connect(self.size_changed_emit)
+        self._previous_sb_value = 0
+        QTimer.singleShot(10, self.update_browser)  # the reason for the delay is to wait for the widget to be added to the layout before rendering
 
 
     def _build_ui(self):
@@ -159,47 +160,44 @@ class ChatMessageFrame(MessageFrame):
         self._browser = browser
         self._copy_button = copy_button
 
-    def append_markdown(self, chunk: str) -> None:
-        self._md_buffer += chunk
-        scrollbar_val = self._browser.verticalScrollBar().value()
-        doc = QTextDocument()
-        doc.setHtml(md.render(self._md_buffer))  # parse off-screen
-        self._browser.setDocument(doc)  # cheap swap
-        QTimer.singleShot(0, lambda: self.set_view(scrollbar_val))
-
     def get_markdown(self) -> str:
         return self._md_buffer
 
     def set_markdown(self, text) -> None:
         self._md_buffer = text
-        scrollbar_val = self._browser.verticalScrollBar().value()
-        doc = QTextDocument()
-        doc.setHtml(md.render(text))  # parse off-screen
-        self._browser.setDocument(doc)  # cheap swap
-        QTimer.singleShot(0, lambda: self.set_view(scrollbar_val))
+        self.update_browser()
 
-    def set_view(self, scrollbar_current_val):
+    def append_markdown(self, chunk: str) -> None:
+        self._md_buffer += chunk
+        self.update_browser()
+
+    def update_browser(self) -> None:
+        self._previous_sb_value = self._browser.verticalScrollBar().value()  # quick get it!!!
+        self._browser.setHtml(md.render(self._md_buffer))
+        self.restoreScroll(self._previous_sb_value)
+
+
+    def restoreScroll(self, sb_current_val):
         if self._browser.autoscroll is True:
             c = self._browser.textCursor()
             c.movePosition(QTextCursor.End)
             self._browser.setTextCursor(c)
             self._browser.ensureCursorVisible()
         else:
-            self._browser.verticalScrollBar().setValue(scrollbar_current_val)
-        self.size_changed.emit(self.sizeHint())
+            self._browser.verticalScrollBar().setValue(sb_current_val)
 
     def update_boundaries(self, parent_w):
         print("updating boundaries")
         if parent_w:
-            w = int(parent_w * 0.35)
+            w = int(parent_w * 0.75)
             h = int(float(w) * 0.618)                   # Follow the ratio
             print(f"updating boundaries: w:{w}x h:{h}")
             self._browser.setMaximumWidth(w)
             self._browser.setMaximumHeight(h)
             self._browser.recompute_dimensions()  # boundaries just shifted so lets recompute
 
-    def _preprocess_think_blocks(self, text: str) -> str:
-        return text.replace("<think>", "&lt;think&gt;").replace("</think>", "&lt;/think&gt;")
+    def size_changed_emit(self):
+        self.size_changed.emit(self.sizeHint())
 
     # --- overrides -----------------------------------------------------
 
