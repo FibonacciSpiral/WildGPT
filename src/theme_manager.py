@@ -104,7 +104,7 @@ class ThemeManager:
         QWidget {{ font-family: {theme.font_family}; font-size: {theme.font_size}px; }}
         QMainWindow {{ background: {theme.bg}; color: {theme.text}; }}
         QLabel {{ color: {theme.text}; line-height: 1.5em; }}
-        QTextBrowser, QSpinBox, QDoubleSpinBox, QTextEdit, QLineEdit {{
+        QTextBrowser, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit, QLineEdit {{
             background: {theme.input_bg};
             color: {theme.text};
             border: 2px solid {theme.border};

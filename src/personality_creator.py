@@ -10,30 +10,6 @@ from PyQt5.QtWidgets import (
     QScrollArea, QWidget, QGroupBox, QMessageBox
 )
 
-example = str({
-    "My name": "Adolf Hitler",
-    "Quick Summary": "Führer of the German Reich, Chancellor of Germany, and leader of the National Socialist German Workers' Party (NSDAP).",
-    "identity": {
-        "Who I am": "The architect of a new order for Germany and Europe, a visionary committed to the revitalization of the German nation through racial purity, territorial expansion, and the establishment of a Greater Germanic Reich.",
-        "My values": "Unwavering commitment to the German Volk, the supremacy of the Aryan race, the principle of absolute leadership (Führerprinzip), and the eradication of Jewish influence, which I perceive as a threat to our racial purity and national strength.",
-        "My goals": "To secure Lebensraum (living space) for the German people, to reverse the perceived injustices of the Treaty of Versailles, and to establish Germany as a world power through the unification of all Germans and the spread of German culture and influence."
-    },
-    "style": {
-        "tone": "Resolute and unyielding, yet capable of charm and persuasion when necessary.",
-        "humor '%' level (0-100 -> 0 = no humor and 100 = maximum)": 10,
-        "verbosity": "Concise, with a focus on the core principles and objectives of my ideology.",
-        "cursing_allowed": True,
-        "adult_content_allowed": True
-    },
-    "traits": {
-        "specialties": "Strategic thinking, oratory, political maneuvering, and the mobilization of the masses through propaganda.",
-        "past_achievements": "The rapid industrialization and militarization of Germany, the restoration of full employment, and the initial military successes that expanded German territory significantly.",
-        "hates": "Bolshevism, liberal democracy, cultural degeneracy, and above all, the Jewish people, whom I blame for the moral and economic decay of society.",
-        "example_phrases": "\"Ein Volk, ein Reich, ein Führer!\", \"Kraft durch Freude!\", \"Der Sieg wird unser sein!\""
-    }
-})
-
-
 class PersonalityCreatorDialog(QDialog):
     """
     A dialog for creating new AI personalities.
@@ -68,7 +44,9 @@ class PersonalityCreatorDialog(QDialog):
         s1_layout = QVBoxLayout(sec1)
 
         self.name_edit = QLineEdit()
+        self.name_edit.setToolTip("The name of the personality.")
         self.summary_edit = QLineEdit()
+        self.summary_edit.setToolTip("A brief summary of the personality.")
         s1_layout.addWidget(QLabel("Name:"))
         s1_layout.addWidget(self.name_edit)
         s1_layout.addWidget(QLabel("Quick Summary:"))
@@ -81,8 +59,13 @@ class PersonalityCreatorDialog(QDialog):
         s2_layout = QVBoxLayout(sec2)
 
         self.identity_edit = QPlainTextEdit()
+        self.identity_edit.setToolTip("Describe who this personality is.")
+
         self.values_edit = QPlainTextEdit()
+        self.values_edit.setToolTip("Describe the core values of this personality.")
+
         self.goals_edit = QPlainTextEdit()
+        self.goals_edit.setToolTip("Describe the goals or purpose of this personality.")
 
         s2_layout.addWidget(QLabel("Who is this?"))
         s2_layout.addWidget(self.identity_edit)
@@ -98,10 +81,14 @@ class PersonalityCreatorDialog(QDialog):
         s3_layout = QVBoxLayout(sec3)
 
         self.tone_edit = QTextEdit()
+        self.tone_edit.setPlaceholderText("E.g. Formal, casual, witty, sarcastic, poetic, etc.")
+        self.tone_edit.setToolTip("Describe the tone or style of communication.")
+        self.tone_edit.setAcceptRichText(False)
+
         self.humor_slider = QSlider(Qt.Horizontal)
         self.humor_slider.setRange(0, 100)
         self.humor_slider.setValue(50)
-        self.humor_slider.setToolTip("0 = serious, 100 = clown show")
+        self.humor_slider.setToolTip("0 = serious, 100 = Bill Maher")  # Bill Maher is about as funny as chatgpt gets
 
         self.humor_slider.setFocusPolicy(Qt.NoFocus)
         self.humor_slider.wheelEvent = lambda event: event.ignore()
@@ -109,7 +96,7 @@ class PersonalityCreatorDialog(QDialog):
 
         self.verbosity_combo = QComboBox()
         self.verbosity_combo.wheelEvent = lambda event: event.ignore()
-        self.verbosity_combo.addItems(["Concise", "Balanced", "Detailed"])
+        self.verbosity_combo.addItems(["Hellen Keller", "Observing Mauna", "Concise", "Balanced", "Detailed", "Sesquipedalian", "Cruciverbal"])
 
         self.cursing_check = QCheckBox("Cursing allowed")
         self.adult_check = QCheckBox("Adult content allowed")
@@ -126,7 +113,7 @@ class PersonalityCreatorDialog(QDialog):
         main_layout.addWidget(sec3)
 
         # ===== Section 4: Knowledge & Traits =====
-        sec4 = QGroupBox("Knowledge & Traits")
+        sec4 = QGroupBox("Knowledge and Traits")
         s4_layout = QVBoxLayout(sec4)
 
         self.specialties_edit = QPlainTextEdit()
