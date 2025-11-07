@@ -26,7 +26,7 @@ class PersonalityCreatorDialog(QDialog):
     def __init__(self, parent=None, personality_dict=None):
         super().__init__(parent)
         self.setWindowTitle("Create New Personality")
-        self.setMinimumSize(950, 740)
+        self.setMinimumSize(1700, 1200)
 
         # Allow minimize/maximize/close
         flags = self.windowFlags()
@@ -68,7 +68,6 @@ class PersonalityCreatorDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
         self.copy_to_freeform_btn.clicked.connect(self._populate_freeform_from_form)
 
-        # Cross-tab name syncing (summary removed)
         self._link_line_edits(self.name_edit, self.freeform_name_edit)
 
     # ---------------------------------------------------------------------
@@ -124,7 +123,7 @@ class PersonalityCreatorDialog(QDialog):
                 return
 
             # # --- 3) Summary (you had this in the example but weren’t setting it) ---
-            # self.summary_edit.setText(str(content.get("Quick Summary", "") or ""))
+            self.quick_summary_edit.setPlainText(str(content.get("Quick Summary", "") or ""))
 
             # --- 4) Identity ---
             identity = content.get("identity", {}) or {}
@@ -191,6 +190,14 @@ class PersonalityCreatorDialog(QDialog):
         self.name_edit.setToolTip("The name of the personality.")
         s1_layout.addWidget(QLabel("Name:"))
         s1_layout.addWidget(self.name_edit)
+
+        # NEW: Quick Summary (one or two sentences)
+        self.quick_summary_edit = QPlainTextEdit()
+        self.quick_summary_edit.setToolTip("A short summary for this personality (kept at ~1–2 sentences).")
+        self.quick_summary_edit.setFixedHeight(140)  # keep it compact
+        s1_layout.addWidget(QLabel("Quick Summary"))
+        s1_layout.addWidget(self.quick_summary_edit)
+
         layout.addWidget(sec1)
 
         # ===== Section 2: Identity =====
@@ -308,6 +315,7 @@ class PersonalityCreatorDialog(QDialog):
         name = self.name_edit.text().strip()
         data = {
             "My name": name,
+            "Quick Summary": self.quick_summary_edit.toPlainText().strip(),
             "identity": {
                 "Who I am": self.identity_edit.toPlainText().strip(),
                 "My values": self.values_edit.toPlainText().strip(),

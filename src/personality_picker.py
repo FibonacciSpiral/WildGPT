@@ -108,12 +108,10 @@ class PersonalityPickerDialog(QDialog):
 
         # ---------- Bottom Controls ----------
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
-        self.default_checkbox = QCheckBox("Use this personality as default", self)
 
         layout = QVBoxLayout(self)
         layout.addWidget(top)
         layout.addWidget(splitter)
-        layout.addWidget(self.default_checkbox)
         layout.addWidget(buttons)
 
         # Persist geometry/splitter
@@ -295,9 +293,6 @@ class PersonalityPickerDialog(QDialog):
     def get_selected_data(self) -> Optional[Dict]:
         item = self.list_widget.currentItem()
         return item.data(Qt.UserRole) if item else None
-
-    def use_as_default(self) -> bool:
-        return self.default_checkbox.isChecked()
     
 
 personalities = [
