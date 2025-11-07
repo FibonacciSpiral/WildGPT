@@ -68,7 +68,7 @@ class TopBar(QWidget):
         self.save_chat_btn = QPushButton("Save Chat", self)
         self.load_chat_btn = QPushButton("Load Chat", self)
         self.pick_persona_btn = QPushButton("Pick Personality", self)
-        self.create_persona_btn = QPushButton("Create Personality", self)
+        self.create_persona_btn = QPushButton("Personality Editor", self)
 
         # Layout row
         layout.addWidget(QLabel("Model:"), 0, 0)

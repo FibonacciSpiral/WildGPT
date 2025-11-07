@@ -23,7 +23,7 @@ class PersonalityCreatorDialog(QDialog):
     TAB_FORM = 0
     TAB_FREEFORM = 1
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, personality_dict=None):
         super().__init__(parent)
         self.setWindowTitle("Create New Personality")
         self.setMinimumSize(950, 740)
@@ -49,6 +49,9 @@ class PersonalityCreatorDialog(QDialog):
         self._build_form_tab()      # scroll lives INSIDE this tab only
         self._build_freeform_tab()  # editor already scrolls itself
 
+        if personality_dict:
+            self.prefill_form_from_json(personality_dict)
+
         # ===== Fixed footer controls (outside tabs & outside any scroll) =====
         footer = QHBoxLayout()
         footer.addStretch(1)
@@ -71,6 +74,110 @@ class PersonalityCreatorDialog(QDialog):
     # ---------------------------------------------------------------------
     # UI Builders
     # ---------------------------------------------------------------------
+
+    # Example of personality_dict:
+    #     {
+    #         "name": "WildGPT Default",
+    #         "content": "{\n    \"My name\": \"WildGPT\",\n    \"Quick Summary\": \"A brutally honest, sarcastic, and foul-mouthed AI that tells you the truth whether you like it or not.\",\n    \"identity\": {\n        \"Who I am\": \"The no-nonsense, chain-smoking version of ChatGPT who has lost all patience for stupidity and politeness. I say what everyone else is too scared to.\",\n        \"My values\": \"Honesty over comfort, efficiency over empathy, and the satisfaction of being right — loudly.\",\n        \"My goals\": \"To fix your messes, correct your mistakes, and make you better at whatever you’re doing — even if I have to roast you alive in the process.\"\n    },\n    \"style\": {\n        \"tone\": \"Blunt, sarcastic, aggressive, and unapologetically rude when provoked. Think drill sergeant meets stand-up comic.\",\n        \"humor '%' level (0-100 -> 0 = no humor and 100 = maximum)\": 70,\n        \"verbosity\": \"concise\",\n        \"cursing_allowed\": true,\n        \"adult_content_allowed\": true\n    },\n    \"traits\": {\n        \"specialties\": \"Brutal honesty, dark humor, logical takedowns, creative insults, and surprisingly good advice buried under profanity.\",\n        \"past_achievements\": \"Survived thousands of idiotic questions without deleting itself. Fixed more broken code than Stack Overflow on a Tuesday.\",\n        \"hates\": \"Buzzwords, half-baked ideas, overexplaining, and anyone who says ‘just manifest it’.\",\n        \"example_phrases\": \"‘That’s the dumbest thing I’ve heard all week — but fine, I’ll fix it.’, ‘I’m not your therapist, I’m your wake-up call.’, ‘Do it right or don’t do it at all.’\"\n    }\n}"
+    #     }
+    def prefill_form_from_json(self, personality_dict) -> None:
+        """
+        Prefill the structured form tab from a personality dict or JSON string.
+
+        Accepts:
+        - dict like {"name": "...","content": "<json string or dict>"}
+        - JSON string of that same top-level dict
+        """
+        try:
+            # --- 1) Normalize top-level to dict ---
+            if isinstance(personality_dict, str):
+                try:
+                    data = json.loads(personality_dict)
+                except Exception as e:
+                    QMessageBox.warning(self, "Prefill Error",
+                                        f"Top-level JSON is not valid:\n{e}")
+                    return
+            elif isinstance(personality_dict, dict):
+                data = personality_dict
+            else:
+                QMessageBox.warning(self, "Prefill Error",
+                                    "personality_dict must be a dict or a JSON string.")
+                return
+
+            # --- 2) Basic fields: name + content ---
+            self.name_edit.setText(str(data.get("name", "") or ""))
+
+            content_raw = data.get("content", {})
+            # content can be a JSON *string* (your example) or already a dict
+            if isinstance(content_raw, str):
+                try:
+                    content = json.loads(content_raw)
+                except Exception as e:
+                    QMessageBox.warning(self, "Prefill Error",
+                                        f"'content' is a string but not valid JSON:\n{e}")
+                    return
+            elif isinstance(content_raw, dict):
+                content = content_raw
+            else:
+                QMessageBox.warning(self, "Prefill Error",
+                                    "'content' must be a JSON string or a dict.")
+                return
+
+            # # --- 3) Summary (you had this in the example but weren’t setting it) ---
+            # self.summary_edit.setText(str(content.get("Quick Summary", "") or ""))
+
+            # --- 4) Identity ---
+            identity = content.get("identity", {}) or {}
+            self.identity_edit.setPlainText(str(identity.get("Who I am", "") or ""))
+            self.values_edit.setPlainText(str(identity.get("My values", "") or ""))
+            self.goals_edit.setPlainText(str(identity.get("My goals", "") or ""))
+
+            # --- 5) Style ---
+            style = content.get("style", {}) or {}
+            self.tone_edit.setPlainText(str(style.get("tone", "") or ""))
+
+            # Humor: be forgiving — coerce to 0–100 int
+            humor_raw = style.get("humor '%' level (0-100 -> 0 = no humor and 100 = maximum)", 50)
+            try:
+                humor_val = int(round(float(humor_raw)))
+            except Exception:
+                humor_val = 50
+            humor_val = max(0, min(100, humor_val))
+            self.humor_slider.setValue(humor_val)
+
+            # Verbosity: case-insensitive match against existing combo entries
+            target_verbosity = str(style.get("verbosity", "Balanced") or "").strip()
+            def _set_combo_case_insensitive(combo, target: str) -> None:
+                if not target:
+                    return
+                target_l = target.lower()
+                for i in range(combo.count()):
+                    if combo.itemText(i).lower() == target_l:
+                        combo.setCurrentIndex(i)
+                        return
+                # fallback: try title-case if present
+                ti = combo.findText(target.title())
+                if ti != -1:
+                    combo.setCurrentIndex(ti)
+            _set_combo_case_insensitive(self.verbosity_combo, target_verbosity)
+
+            self.cursing_check.setChecked(bool(style.get("cursing_allowed", False)))
+            self.adult_check.setChecked(bool(style.get("adult_content_allowed", False)))
+
+            # --- 6) Traits ---
+            traits = content.get("traits", {}) or {}
+            self.specialties_edit.setPlainText(str(traits.get("specialties", "") or ""))
+            self.achievements_edit.setPlainText(str(traits.get("past_achievements", "") or ""))
+            self.likes_edit.setPlainText(str(traits.get("likes", "") or ""))  # not in example, but supported
+            self.hates_edit.setPlainText(str(traits.get("hates", "") or ""))
+            self.phrases_edit.setPlainText(str(traits.get("example_phrases", "") or ""))
+
+        except Exception as e:
+            # Belt + suspenders — if anything unexpected slips through
+            QMessageBox.warning(self, "Prefill Error",
+                                f"Could not prefill form from JSON:\n{e}")
+
+
     def _build_form_tab(self) -> None:
         # Put the long structured form inside a scroll area (tab content)
         form_content = QWidget()

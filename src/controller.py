@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QWidget, QDialog
 from src.personality_picker import PersonalityPickerDialog
 from src.personality_creator import PersonalityCreatorDialog
 from src.stream_worker import HFChatStreamWorker
+from src.decision_dialog import DecisionDialog
 from src.view import ChatWindow
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # optional if you've run `hf auth login`
@@ -55,7 +56,7 @@ class Controller(QWidget):
         self.view.saveChatRequested.connect(self.save_chat_requested)
         self.view.loadChatRequested.connect(self.load_chat)
         self.view.pickPersonalityRequested.connect(self.pick_personality)
-        self.view.createPersonalityRequested.connect(self.create_personality)
+        self.view.createPersonalityRequested.connect(self.open_personality_edit_menu)
 
         # streaming members
         self._thread: Optional[QThread] = None
@@ -181,6 +182,17 @@ class Controller(QWidget):
         except Exception as e:
             self.view.show_error("Save Error", f"Could not save personality to file:\n{e}")
             return False
+        
+    def pick_personality_helper(self) -> str | None :
+        personalities = self.load_personalities()
+
+        if personalities:
+            dialog = PersonalityPickerDialog(personalities, self.view)
+            if dialog.exec_() == QDialog.Accepted:
+                name = dialog.get_selected()
+                if name:
+                    return next((p for p in personalities if p["name"] == name), None)
+        return None
 
     def pick_personality(self):
         """Choose the system prompt/personality from a predefined list.
@@ -192,21 +204,29 @@ class Controller(QWidget):
         if self.view.is_busy():
             return
         
-        personalities = self.load_personalities()
+        selected = self.pick_personality_helper()
+                
+        if selected:
+            # if selected, only update the system prompt and preserve the chat!
+            self._messages[0] = {"role": "system", "content": selected["content"]} # replace system prompt
+            self.view.show_info("Personality Set", f"Personality set to: {selected['name']}")
+            self.SYSTEM_PROMPT = selected["content"]
+        else:
+            self.view.show_error("Selection Error", "Selected personality not found.")
 
-        if personalities:
-            dialog = PersonalityPickerDialog(personalities, self.view)
-            if dialog.exec_() == QDialog.Accepted:
-                name = dialog.get_selected()
-                if name:
-                    selected = next((p for p in personalities if p["name"] == name), None)
-                    if selected:
-                        # if selected, only update the system prompt and preserve the chat!
-                        self._messages[0] = {"role": "system", "content": selected["content"]} # replace system prompt
-                        self.view.show_info("Personality Set", f"Personality set to: {name}")
-                        self.SYSTEM_PROMPT = selected["content"]
-                    else:
-                        self.view.show_error("Selection Error", "Selected personality not found.")
+    def open_personality_edit_menu(self) -> None:
+        # Opens a dialog to allow the user to choose whether to create, edit or delete personalities.
+        if self.view.is_busy():
+            return
+        dialog = DecisionDialog(self.view)
+        if dialog.exec_() == QDialog.Accepted:
+            action = dialog.get_action()
+            if action == "create":
+                self.create_personality()
+            elif action == "edit":
+                self.edit_personality()
+            elif action == "delete":
+                self.delete_personality()
 
 
     def create_personality(self) -> None:
@@ -243,6 +263,72 @@ class Controller(QWidget):
             else:
                 # User canceled
                 print("Personality creation canceled.")
+        except Exception as e:
+            self.view.show_error("Unexpected Error", f"An error occurred: {e}")
+
+    def edit_personality(self) -> None:
+        """
+        Allows the user to select a personality to edit, opens it in the Personality Creator dialog,
+        and saves any changes back to the personality list and JSON file.
+        """
+        personality_names = [p["name"] for p in self.personalities]
+        if not personality_names:
+            self.view.show_error("No Personalities", "There are no personalities to edit.")
+            return
+
+        picker_dialog = PersonalityPickerDialog(self.personalities, self.view)
+        if picker_dialog.exec_() == QDialog.Accepted:
+            selected_name = picker_dialog.get_selected()
+            selected_personality = next((p for p in self.personalities if p["name"] == selected_name), None)
+            if not selected_personality:
+                self.view.show_error("Selection Error", "Selected personality not found.")
+                return
+
+            dialog = PersonalityCreatorDialog(self.view, selected_personality)
+            if dialog.exec_():  # User clicked 'Save / Create'
+                result_json = dialog.get_result_json()
+                if not result_json:
+                    self.view.show_error("Edit Failed", "No data was returned from the dialog.")
+                    return
+
+                try:
+                    data = json.loads(result_json)
+                except json.JSONDecodeError as e:
+                    self.view.show_error("Invalid JSON", f"Could not decode personality data: {e}")
+                    return
+
+                # Update in-memory personality list
+                selected_personality["name"] = data.get("My name", selected_personality["name"])
+                selected_personality["content"] = result_json
+
+                # Save to file
+                if not self.save_personalities_to_file(self.personalities):
+                    return  # Error message already shown in the method
+
+                # Let the user know it worked
+                self.view.show_info("Personality Updated", f"Personality '{selected_personality['name']}' updated successfully!")
+            else:
+                # User canceled
+                print("Personality editing canceled.")
+
+
+    def delete_personality(self) -> None:
+        """
+        Deletes the selected personality from the list and updates the JSON file.
+        """
+        personality = self.pick_personality_helper()
+        if not personality:
+            return
+
+        try:
+            self.personalities.remove(personality)
+
+            # Save updated list to file
+            if not self.save_personalities_to_file(self.personalities):
+                return  # Error message already shown in the method
+
+            # Let the user know it worked
+            self.view.show_info("Personality Deleted", f"Personality deleted successfully!")
         except Exception as e:
             self.view.show_error("Unexpected Error", f"An error occurred: {e}")
 
