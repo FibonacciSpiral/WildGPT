@@ -51,7 +51,7 @@ class Controller(QWidget):
         # connections
         self.view.sendMessage.connect(self.on_send)
         self.view.stopRequested.connect(self.on_stop)
-        self.view.clearRequested.connect(self.on_clear)
+        self.view.clearRequested.connect(self.ask_save_before_new_or_exit)
         self.view.saveChatRequested.connect(self.save_chat_requested)
         self.view.loadChatRequested.connect(self.load_chat)
         self.view.pickPersonalityRequested.connect(self.pick_personality)
@@ -98,7 +98,17 @@ class Controller(QWidget):
             else:
                 return  # bail
         else:
-            self.view.show_error("Why are you trying to save a chat when there isn't one??? :o Are you alright...")
+            self.view.show_error("No Chat History!!!", "Why are you trying to save a chat when there isn't one??? :o Are you alright...")
+
+    def ask_save_before_new_or_exit(self) -> None:
+        # ask the user if they want to save before starting a new chat or exiting
+        save_chat = self.view.ask_save_before_new()
+        if save_chat is None:
+            return   # user canceled
+        elif save_chat is True:
+            self.save_chat_requested()  # will clear if successful
+        else:
+            self.on_clear()             # just clear
 
     def save_chat(self, location: str) -> bool:
         """Write messages to a JSON file at the given path."""

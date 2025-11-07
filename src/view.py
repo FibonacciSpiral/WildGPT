@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from PyQt5.QtCore import pyqtSignal, Qt, QStandardPaths, QSize, QUrl
 from PyQt5.QtGui import QIcon
@@ -123,7 +124,7 @@ class ChatWindow(QMainWindow):
         super().resizeEvent(event)
         self.input_bar.update_boundaries(self.width(), self.height())
 
-    def ask_save_before_new(self) -> int:
+    def ask_save_before_new(self) -> Optional[bool]:
         """Ask user if they want to save before starting a new chat."""
         response =  QMessageBox.question(
             self,
