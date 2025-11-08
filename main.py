@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import traceback
+import multiprocessing as mp
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -353,6 +354,18 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # In frozen apps, child processes re-launch the EXE.
+    # These lines prevent your GUI from starting again in the child.
+    if getattr(sys, "frozen", False):
+        mp.freeze_support()
+        mp.set_executable(sys.executable)
+
+    # Ensure 'spawn' everywhere (safe for PyQt + frozen apps)
+    try:
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass  # already set
+
     try:
         sys.exit(main(sys.argv))
     except Exception:

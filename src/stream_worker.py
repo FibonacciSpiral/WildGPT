@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import sys
 from typing import List, Dict, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -89,7 +90,9 @@ class HFChatStreamWorker(QObject):
             self._stopped = True
 
     def run(self) -> None:
-
+            # In frozen builds, ensure children relaunch this same EXE (not the GUI entrypoint)
+        if getattr(sys, "frozen", False):
+            mp.set_executable(sys.executable)
 
         ctx = mp.get_context("spawn")
         self._queue = ctx.Queue()

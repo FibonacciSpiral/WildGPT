@@ -45,7 +45,7 @@ def build(
 
     # Optional dependencies
     dependencies_dir = root / "Dependencies"
-    icon = dependencies_dir / "wildgpt_icon.ico"
+    icon = dependencies_dir / "wildAI.ico"
 
     args: list[str] = [
         str(entry),
